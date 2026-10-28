@@ -1,5 +1,6 @@
 mod auth;
 mod hls;
+mod media_features;
 mod parser;
 mod playback;
 use axum::{
@@ -112,6 +113,7 @@ fn db(app: &App) -> Connection {
     c
 }
 fn init(c: &Connection) {
+    media_features::init(c);
     c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, root TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, parsed TEXT NOT NULL, result TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 1, scanned TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, value TEXT NOT NULL, saved INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS watch_progress(path TEXT PRIMARY KEY, position REAL NOT NULL, duration REAL NOT NULL, updated_at INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS libraries(id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('movie','tv','video','other')), roots TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS library_files(path TEXT PRIMARY KEY, library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE); INSERT OR IGNORE INTO libraries(name,kind,created_at) VALUES('Movies','movie',0),('TV Shows','tv',0),('Videos','video',0); INSERT OR IGNORE INTO settings(key,value) VALUES('library_auto_sort','true'); PRAGMA foreign_keys=ON;").unwrap();
     let has_completed: bool = c
         .prepare("PRAGMA table_info(watch_progress)")
@@ -1944,6 +1946,8 @@ async fn main() {
         .route("/api/subtitles/key", post(save_subtitle_key))
         .route("/api/subtitles/search", get(subtitle_search))
         .route("/api/catalogue/{id}", get(catalogue))
+        .route("/api/playback/markers", get(media_features::markers_get))
+        .route("/api/admin/playback/markers", post(media_features::markers_post))
         .route("/api/playback/info", get(playback::info))
         .route("/api/playback/hls/start", post(hls::start))
         .route("/api/playback/hls/stop", post(hls::stop))

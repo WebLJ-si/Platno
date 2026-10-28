@@ -65,6 +65,10 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
             assert 800<frequency<950,('selected second audio track frequency',frequency)
         api('/api/playback/hls/stop',{'id':hls['id']})
         request(hls['url'],status=404)
+        api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':0,'end':3}]})
+        assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
+        api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':3,'end':1}]},status=400)
+        assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
         api('/api/playback/watched',{'paths':[str(video)],'action':'watched'})
         assert api('/api/playback/progress?'+q)['completed']
         api('/api/playback/watched',{'paths':[str(video),'/not/in/library'],'action':'reset'},status=404)
