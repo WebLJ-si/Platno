@@ -1,0 +1,22 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('static/index.html','utf8');
+function source(name){let start=html.indexOf(`function ${name}(`);assert(start>=0,name);let end=html.indexOf('\n',start);return html.slice(start,end)}
+const ctx={shuffleSeed:.25};vm.createContext(ctx);
+for(let name of ['languageMatches','browseFilter','playerKey','nextPlayable'])vm.runInContext(source(name),ctx);
+assert(ctx.languageMatches('slv','sl'));assert(ctx.languageMatches('eng','en'));assert(!ctx.languageMatches('eng','sl'));assert(!ctx.languageMatches('eng',''));
+const items=[{title:'Alpha',year:'2020',rating:8,runtime:85,genres:['Comedy'],files:[{path:'a',scanned:'2026-01-01'}]},{title:'Beta',year:'2022',rating:6,runtime:150,genres:['Drama'],files:[{path:'b',scanned:'2026-10-01'}]},{title:'Unknown',files:[{path:'c'}]}];
+const watched=new Map([['a',{completed:true}]]);
+assert.equal(ctx.browseFilter(items,{minutes:'90'},watched)[0].item.title,'Alpha');
+assert.equal(ctx.browseFilter(items,{genre:'Drama'},watched)[0].item.title,'Beta');
+assert.equal(ctx.browseFilter(items,{year:'2020',unwatched:true},watched).length,0);
+assert.equal(ctx.browseFilter(items,{rating:'7'},watched).length,1);
+assert.equal(ctx.browseFilter(items,{sort:'added'},watched)[0].item.title,'Beta');
+assert.equal(ctx.browseFilter(items,{sort:'year'},watched)[0].item.title,'Beta');
+assert.equal(ctx.browseFilter(items,{sort:'rating'},watched)[0].item.title,'Alpha');
+let calls=[];Object.assign(ctx,{togglePlay:()=>calls.push('play'),jumpVideo:n=>calls.push(n),toggleFullscreen:()=>calls.push('full'),toggleMute:()=>calls.push('mute'),nextEpisode:()=>calls.push('next')});
+const press=(key,extra={})=>ctx.playerKey({key,target:{tagName:'DIV'},preventDefault(){calls.push('prevent')},...extra});
+press('j');press('l');press('N',{shiftKey:true});assert.deepEqual(calls,[-10,'prevent',10,'prevent','next','prevent']);
+calls=[];press(' ',{target:{tagName:'TEXTAREA'}});press('j',{ctrlKey:true});assert.equal(calls.length,0);
+vm.runInContext('let playerState={path:"one"}',ctx);ctx.files=[{path:'one',result:{season:1,episodes:[1,2]}},{path:'duplicate',result:{season:1,episodes:[1]}},{path:'offline',available:false,result:{season:1,episodes:[3]}},{path:'next',result:{season:1,episodes:[4]}}];ctx.playableEpisodes=()=>ctx.files;
+assert.equal(ctx.nextPlayable().path,'next');
+console.log('New feature behavior checks passed');

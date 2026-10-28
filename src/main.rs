@@ -483,6 +483,8 @@ async fn identify(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
                     result["provider"] = json!("tmdb");
                     result["year"] = x["release_date"].clone();
                     result["description"] = x["overview"].clone();
+                    result["rating"] = x["vote_average"].clone();
+                    result["language"] = x["original_language"].clone();
                     if let Some(poster) = x["poster_path"].as_str() {
                         if let Ok(config) = cached(
                             app,
@@ -606,6 +608,10 @@ async fn identify(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
     result["candidates"]=json!(candidates.iter().take(5).map(|(s,x)|json!({"id":x["id"],"title":x["name"],"year":x["premiered"],"score":s,"poster":x["image"]["medium"]})).collect::<Vec<_>>());
     if let Some((score, show)) = candidates.first() {
+        result["genres"]=show["genres"].clone();
+        result["rating"]=show["rating"]["average"].clone();
+        result["runtime"]=show["averageRuntime"].clone();
+        result["language"]=show["language"].clone();
         let margin = score - candidates.get(1).map(|x| x.0).unwrap_or(0.0);
         if *score < 80.0 {
             result["explanation"] = json!("No sufficiently similar show; review candidates");
@@ -1321,13 +1327,25 @@ fn files_blocking(app: &App) -> Json<Value> {
         }
     }
     let mut stmt = c
-        .prepare("SELECT path,parsed,result,locked FROM files ORDER BY path")
+        .prepare("SELECT path,parsed,result,locked,size,mtime,scanned FROM files ORDER BY path")
         .unwrap();
     let availability = app.availability.read().unwrap().clone();
-    let rows=stmt.query_map([],|r|{
+    let mut rows=stmt.query_map([],|r|{
         let path:String=r.get(0)?; let p:String=r.get(1)?;let v:String=r.get(2)?;
-        Ok(json!({"available":availability.get(&path),"path":path,"parsed":serde_json::from_str::<Value>(&p).unwrap_or_default(),"result":serde_json::from_str::<Value>(&v).unwrap_or_default(),"locked":r.get::<_,i64>(3)?==1,"library_ids":memberships.get(&path).cloned().unwrap_or_default()}))
+        Ok(json!({"available":availability.get(&path),"path":path,"parsed":serde_json::from_str::<Value>(&p).unwrap_or_default(),"result":serde_json::from_str::<Value>(&v).unwrap_or_default(),"locked":r.get::<_,i64>(3)?==1,"size":r.get::<_,i64>(4)?,"mtime":r.get::<_,i64>(5)?,"scanned":r.get::<_,String>(6)?,"library_ids":memberships.get(&path).cloned().unwrap_or_default()}))
     }).unwrap().flatten().collect::<Vec<_>>();
+    let details:HashMap<String,Value>=c.prepare("SELECT key,value FROM cache WHERE key LIKE 'tmdb:movie-detail:%' OR key LIKE 'tvmaze:show:%'").and_then(|mut s|s.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).unwrap_or_default().into_iter().filter_map(|(k,v)|serde_json::from_str(&v).ok().map(|v|(k,v))).collect();
+    for row in &mut rows {
+        let result=&mut row["result"];
+        let key=if result["kind"]=="movie" {format!("tmdb:movie-detail:{}",result["provider_id"])} else {format!("tvmaze:show:{}",result["provider_id"])};
+        if let Some(detail)=details.get(&key) {
+            let movie=result["kind"]=="movie";
+            result["genres"]=if movie {json!(detail["genres"].as_array().into_iter().flatten().filter_map(|x|x["name"].as_str()).collect::<Vec<_>>())} else {detail["genres"].clone()};
+            result["rating"]=if movie {detail["vote_average"].clone()} else {detail["rating"]["average"].clone()};
+            result["runtime"]=detail["runtime"].clone();
+            result["language"]=if movie {detail["original_language"].clone()} else {detail["language"].clone()};
+        }
+    }
     Json(json!(rows))
 }
 
