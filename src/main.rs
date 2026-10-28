@@ -1,4 +1,5 @@
 mod auth;
+mod diagnostics;
 mod hls;
 mod media_features;
 mod parser;
@@ -114,6 +115,7 @@ fn db(app: &App) -> Connection {
 }
 fn init(c: &Connection) {
     media_features::init(c);
+    diagnostics::init(c);
     c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, root TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, parsed TEXT NOT NULL, result TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 1, scanned TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, value TEXT NOT NULL, saved INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS watch_progress(path TEXT PRIMARY KEY, position REAL NOT NULL, duration REAL NOT NULL, updated_at INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS libraries(id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('movie','tv','video','other')), roots TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS library_files(path TEXT PRIMARY KEY, library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE); INSERT OR IGNORE INTO libraries(name,kind,created_at) VALUES('Movies','movie',0),('TV Shows','tv',0),('Videos','video',0); INSERT OR IGNORE INTO settings(key,value) VALUES('library_auto_sort','true'); PRAGMA foreign_keys=ON;").unwrap();
     let has_completed: bool = c
         .prepare("PRAGMA table_info(watch_progress)")
@@ -1938,6 +1940,9 @@ async fn main() {
         .route("/api/admin/libraries/delete", post(delete_library))
         .route("/api/admin/library-settings", get(get_library_settings).post(save_library_settings))
         .route("/api/admin/accounts", get(auth::admin_accounts).post(auth::create_account))
+        .route("/api/playback/report", post(diagnostics::report))
+        .route("/api/admin/health", get(diagnostics::health))
+        .route("/api/admin/playback/reports", get(diagnostics::reports))
         .route("/api/admin/dashboard", get(auth::admin_dashboard))
         .route("/api/owner/settings", get(auth::server_settings).post(auth::save_server_setting))
         .route("/api/owner/encoders", get(auth::owner_encoders))

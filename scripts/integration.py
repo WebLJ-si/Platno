@@ -93,6 +93,11 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert not api('/api/playback/progress?'+q)['completed']
         api('/api/playback/progress',{'path':str(video),'position':1,'duration':12})
         assert api('/api/playback/progress?'+q)['progress']['position']==1
+        report={'path':str(video),'message':'Synthetic playback report','mode':'transcode','quality':'auto','video_codec':'h264','audio_codec':'aac'}
+        api('/api/playback/report',report)
+        api('/api/playback/report',report,status=429)
+        assert api('/api/admin/playback/reports')['items'][0]['message']=='Synthetic playback report'
+        health=api('/api/admin/health');assert health['ffmpeg']['available'] and health['ffprobe']['available'] and health['files']==3
         api('/api/user/settings',{'key':'playback_volume','value':'NaN'},status=400)
         api('/api/user/settings',{'key':'playback_volume','value':'0.35'})
         api('/api/user/settings',{'key':'audio_language','value':'sl'})
