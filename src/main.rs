@@ -1964,6 +1964,7 @@ async fn main() {
         .route("/api/subtitles/key", post(save_subtitle_key))
         .route("/api/subtitles/search", get(subtitle_search))
         .route("/api/catalogue/{id}", get(catalogue))
+        .route("/api/playback/thumbnail", get(media_features::thumbnail))
         .route("/api/playback/markers", get(media_features::markers_get))
         .route("/api/admin/playback/markers", post(media_features::markers_post))
         .route("/api/playback/info", get(playback::info))

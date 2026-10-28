@@ -48,6 +48,9 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         raw,h=request('/api/playback/file?'+urlencode({'path':str(direct)}),headers={'Range':'bytes=0-15'},status=206)
         assert len(raw)==16 and h['Content-Range'].startswith('bytes 0-15/')
         request('/api/playback/file?'+urlencode({'path':str(direct)}),headers={'Range':'bytes=999999999-'},status=416)
+        preview=request('/api/playback/thumbnail?'+q+'&time=1')[0]
+        assert preview.startswith(b'\xff\xd8') and request('/api/playback/thumbnail?'+q+'&time=2')[0]==preview
+        request('/api/playback/thumbnail?'+q+'&time=-1',status=400)
         api('/api/playback/hls/start',{'path':str(video),'quality':'nope'},status=400)
         api('/api/playback/hls/start',{'path':'/etc/passwd'},status=404)
         api('/api/playback/hls/start',{'path':str(video),'audio':7},status=400)
