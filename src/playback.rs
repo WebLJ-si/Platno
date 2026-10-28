@@ -21,6 +21,7 @@ pub struct MediaQuery {
     start: Option<f64>,
     quality: Option<String>,
     subtitle: Option<String>,
+    audio: Option<u32>,
 }
 
 pub(crate) fn library_path(app: &App, path: &str) -> Option<PathBuf> {
@@ -129,8 +130,9 @@ async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value,
             .args([
                 "-v",
                 "error",
+                "-show_chapters",
                 "-show_entries",
-                "format=duration,format_name:stream=index,codec_type,codec_name:stream_tags=language,title",
+                "format=duration,format_name,bit_rate:stream=index,codec_type,codec_name,channels,channel_layout,width,height,color_transfer:stream_tags=language,title:chapter=start_time,end_time:chapter_tags=title",
                 "-of",
                 "json",
             ])
@@ -167,7 +169,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
         };
     let cache_key = signature
         .as_ref()
-        .map(|v| format!("playback:probe:v2:{}:{}", q.path, v));
+        .map(|v| format!("playback:probe:v3:{}:{}", q.path, v));
     let cached_data = cache_key
         .as_ref()
         .and_then(|key| {
@@ -210,6 +212,10 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                 .as_str()
                 .and_then(|x| x.parse::<f64>().ok())
                 .filter(|d| d.is_finite() && *d > 0.0);
+            let audio_tracks: Vec<Value> = streams.iter().filter(|x| x["codec_type"] == "audio").enumerate().map(|(i, x)| json!({
+                "id":i,"language":x["tags"]["language"],"codec":x["codec_name"],"channels":x["channels"],
+                "label":format!("{} · {} · {} ch{}", x["tags"]["language"].as_str().unwrap_or("Unknown language"), x["codec_name"].as_str().unwrap_or("audio").to_uppercase(), x["channels"].as_u64().unwrap_or(0), x["tags"]["title"].as_str().map(|t|format!(" · {t}")).unwrap_or_default())
+            })).collect();
             let mut subtitles = Vec::new();
             for sub in streams.iter().filter(|x| {
                 x["codec_type"] == "subtitle"
@@ -227,7 +233,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                     subtitles.push(json!({"id":format!("file:{i}"),"label":name}));
                 }
             }
-            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles})).into_response()
+            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"chapters":data["chapters"],"bit_rate":data["format"]["bit_rate"]})).into_response()
         }
     }
 }
@@ -315,6 +321,13 @@ pub async fn direct(
         )))
         .unwrap()
 }
+pub(crate) async fn audio_map(path: &std::path::Path, audio: Option<u32>) -> Result<String, String> {
+    let Some(index) = audio else { return Ok("0:a:0?".into()); };
+    let data = probe_file(path).await?;
+    let count = data["streams"].as_array().map(|s|s.iter().filter(|x|x["codec_type"]=="audio").count()).unwrap_or(0);
+    if index as usize >= count { return Err("This audio track is unavailable".into()); }
+    Ok(format!("0:a:{index}"))
+}
 pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> Response {
     let Some(path) = library_path(&app, &q.path) else {
         return fail(StatusCode::NOT_FOUND, "File is not in the library");
@@ -330,6 +343,7 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
         return fail(StatusCode::BAD_REQUEST, "Invalid quality");
     };
     let scale=format!("scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
+    let audio_map = match audio_map(&path, q.audio).await { Ok(v)=>v, Err(e)=>return fail(StatusCode::BAD_REQUEST,&e) };
     let (encoder,_available)=h264_encoder(&app).await;
     let mut cmd = Command::new(binary("ffmpeg"));
     cmd.args([
@@ -345,7 +359,7 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
         "-map",
         "0:v:0",
         "-map",
-        "0:a:0?",
+        &audio_map,
     ])
     .args(encoder_options(&encoder))
     .args([

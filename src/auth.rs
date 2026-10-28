@@ -321,7 +321,7 @@ pub async fn save_user_setting(State(app): State<App>, headers: HeaderMap, Json(
     let valid=match input.key.as_str(){
         "playback_quality"=>matches!(input.value.as_str(),"auto"|"1080"|"720"|"480"),
         "playback_speed"=>matches!(input.value.as_str(),"0.5"|"0.75"|"1"|"1.25"|"1.5"|"2"),
-        "subtitle_language"=>matches!(input.value.as_str(),""|"en"|"hr"|"sl"|"de"|"es"|"fr"|"it"|"ja"|"ko"|"pt"|"ru"|"zh"),
+        "audio_language" | "subtitle_language"=>matches!(input.value.as_str(),""|"en"|"hr"|"sl"|"de"|"es"|"fr"|"it"|"ja"|"ko"|"pt"|"ru"|"zh"),
         "subtitle_mode"=>matches!(input.value.as_str(),"off"|"language"|"always"),
         "subtitle_size"=>matches!(input.value.as_str(),"80"|"100"|"120"|"140"),
         "subtitle_color"=>matches!(input.value.as_str(),"white"|"yellow"|"cyan"),

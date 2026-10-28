@@ -35,6 +35,7 @@ pub struct Start {
     path: String,
     start: Option<f64>,
     quality: Option<String>,
+    audio: Option<u32>,
 }
 #[derive(Deserialize)]
 pub struct Stop {
@@ -70,6 +71,7 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     let Some((width, height, rate)) = playback::video_bitrate(&app, input.quality.as_deref().unwrap_or("1080")) else {
         return error(StatusCode::BAD_REQUEST, "Invalid quality");
     };
+    let audio_map = match playback::audio_map(&path, input.audio).await { Ok(v)=>v, Err(e)=>return error(StatusCode::BAD_REQUEST,&e) };
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -102,7 +104,7 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
             "-map",
             "0:v:0",
             "-map",
-            "0:a:0?",
+            &audio_map,
         ])
         .args(playback::encoder_options(&encoder))
         .args([
