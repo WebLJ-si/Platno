@@ -842,7 +842,7 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
             )
             .ok();
         if old.as_ref().is_some_and(|(size, mt, locked, previous)| {
-            let previous_result = serde_json::from_str::<Value>(&previous).unwrap_or_default();
+            let previous_result = serde_json::from_str::<Value>(previous).unwrap_or_default();
             let version = previous_result["matcher_version"].as_u64().unwrap_or(0);
             let old_matcher = (matches!(previous_result["kind"].as_str(), Some("tv" | "extra"))
                 && version < 3)
@@ -1193,7 +1193,7 @@ async fn update_playback_progress(
             .into_response();
     }
     let complete =
-        update.completed || (update.duration > 0.0 && update.position >= update.duration - 8.0);
+        update.completed || (update.duration > 0.0 && update.position >= (update.duration - 8.0).max(update.duration * 0.9));
     let conn = db(&app);
     let result = if complete {
         conn.execute("INSERT INTO watch_progress(path,position,duration,updated_at,completed) VALUES(?1,?2,?3,?4,1) ON CONFLICT(path) DO UPDATE SET position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,completed=1", params![update.path, update.duration, update.duration, Utc::now().timestamp()])

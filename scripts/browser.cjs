@@ -1,6 +1,5 @@
 const assert=require('node:assert/strict');
-let playwright;
-try {playwright=require('playwright')} catch {playwright=require('/Users/svitsmacbookpro/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')}
+const playwright=require('playwright');
 (async()=>{
  const browser=await playwright.chromium.launch({channel:'chrome',headless:true});
  try {
@@ -19,20 +18,37 @@ try {playwright=require('playwright')} catch {playwright=require('/Users/svitsma
   await page.getByRole('button',{name:'▶ Play movie',exact:true}).click();
   await page.locator('#player-audio option').nth(1).waitFor({state:'attached'});
   assert.equal(await page.locator('#player-chapter option').count(),3);
-  await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,{timeout:40000});
+  await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,null,{timeout:40000});
   await page.locator('#player-audio').selectOption('1');
-  await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,{timeout:40000});
+  await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,null,{timeout:40000});
   await page.locator('#player-subtitle').selectOption({index:1});await page.locator('#subtitle-delay').fill('1.5');await page.locator('#subtitle-delay').dispatchEvent('change');
+  await page.waitForFunction(()=>document.getElementById('player-video').textTracks[0]?.cues?.length>0);
+  await page.setViewportSize({width:390,height:844});await page.locator('#player-shell').focus();
+  await page.screenshot({path:'/tmp/plexv2-player-mobile-regression.png'});
+  assert(await page.locator('#player-shell').evaluate(el=>el.scrollWidth<=innerWidth+1&&el.clientHeight>=innerHeight*.95),'mobile player must not overflow');
+  await page.setViewportSize({width:1440,height:950});
+  await page.getByRole('button',{name:'Stream statistics',exact:true}).click();assert(await page.locator('#stream-stats').isVisible());
+  page.once('dialog',d=>d.accept('Chrome regression report'));await page.getByRole('button',{name:'Report playback issue',exact:true}).click();
+  await page.locator('#player-status').filter({hasText:'Report saved'}).waitFor();
   await page.locator('#player-shell').focus();await page.keyboard.press('m');assert.equal(await page.locator('#player-video').evaluate(v=>v.muted),true);await page.keyboard.press('m');
   await page.getByRole('button',{name:'Back to library',exact:true}).click();
   await page.waitForTimeout(500);
   const progress=await page.evaluate(async()=>{let d=await(await fetch('/api/playback/watched')).json();return d.items});assert(progress.length>0);
+  await page.locator('#nav').getByRole('button',{name:'Settings',exact:true}).click();
+  await page.getByRole('button',{name:'Check server health',exact:true}).click();await page.locator('#diagnostic-output').filter({hasText:'Chrome regression report'}).waitFor();
+  await page.getByRole('button',{name:'Show sessions',exact:true}).click();await page.locator('#session-output').filter({hasText:'This device'}).waitFor();
+  await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();await page.locator('.browse-controls').waitFor();
   await page.setViewportSize({width:390,height:844});
   await page.reload();await page.locator('#account-controls .profile-trigger').waitFor();await page.locator('.browse-controls').waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'mobile page must not overflow');
   await page.locator('.card').first().focus();await page.keyboard.press('Enter');assert(await page.locator('#dialog').evaluate(el=>el.open));
   await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.screenshot({path:process.env.PLEXV2_SCREENSHOT||'/tmp/plexv2-mobile-regression.png',fullPage:true});
+  await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
+  await context.setOffline(true);await page.goto(process.argv[2],{waitUntil:'domcontentloaded'});
+  await page.getByRole('heading',{name:'Your media server is unavailable',exact:true}).waitFor();
+  await context.setOffline(false);await page.goto(process.argv[2]);await page.locator('#account-controls .profile-trigger').waitFor();
   assert.deepEqual(errors,[]);
-  console.log('PASS: Chrome UI login, library filters, watched/reset, chapter/audio controls, HLS playback, subtitle delay, shortcuts, close progress, keyboard cards, mobile layout');
+  console.log('PASS: Chrome UI login, library filters, watched/reset, chapter/audio controls, HLS playback, subtitle delay, shortcuts, close progress, keyboard cards, mobile layout, offline fallback');
  } finally {await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});

@@ -20,3 +20,15 @@ calls=[];press(' ',{target:{tagName:'TEXTAREA'}});press('j',{ctrlKey:true});asse
 vm.runInContext('let playerState={path:"one"}',ctx);ctx.files=[{path:'one',result:{season:1,episodes:[1,2]}},{path:'duplicate',result:{season:1,episodes:[1]}},{path:'offline',available:false,result:{season:1,episodes:[3]}},{path:'next',result:{season:1,episodes:[4]}}];ctx.playableEpisodes=()=>ctx.files;
 assert.equal(ctx.nextPlayable().path,'next');
 console.log('New feature behavior checks passed');
+for(let name of ['showPostPlay','cancelPostPlay','applySubtitleDelay'])vm.runInContext(source(name),ctx);
+let interval,card={hidden:true,innerHTML:''},video={paused:false,ended:false},countdown={textContent:''};
+Object.assign(ctx,{profilePrefs:{auto_play_next:'true'},esc:String,setInterval:fn=>(interval=fn,1),clearInterval:()=>{interval=null},$:id=>({'#post-play':card,'#player-video':video,'#next-countdown':countdown}[id])});
+vm.runInContext('playerState={path:"one"}',ctx);calls=[];ctx.showPostPlay(vm.runInContext('playerState',ctx),false);assert.equal(card.hidden,false);assert(interval);
+video.paused=true;interval();assert.equal(countdown.textContent,'');video.paused=false;
+for(let i=0;i<10;i++)interval();assert.deepEqual(calls,['next']);
+vm.runInContext('playerState={path:"one"}',ctx);ctx.showPostPlay(vm.runInContext('playerState',ctx),false);ctx.cancelPostPlay();assert.equal(card.hidden,true);assert.equal(interval,null);
+ctx.profilePrefs.auto_play_next='false';vm.runInContext('playerState={path:"one"}',ctx);ctx.showPostPlay(vm.runInContext('playerState',ctx),true);assert.equal(interval,null,'manual-next mode must not auto advance');
+vm.runInContext('const subtitleCueTimes=new WeakMap();playerState={subtitleDelay:1.5}',ctx);
+const cue={startTime:1,endTime:3};video.textTracks=[{cues:[cue]}];ctx.applySubtitleDelay();assert.equal(cue.startTime,2.5);assert.equal(cue.endTime,4.5);
+vm.runInContext('playerState.subtitleDelay=-.5',ctx);ctx.applySubtitleDelay();assert.equal(cue.startTime,.5);assert.equal(cue.endTime,2.5,'delay changes must not accumulate');
+console.log('Post-play cancellation, pause behavior, manual mode, and subtitle timing checks passed');

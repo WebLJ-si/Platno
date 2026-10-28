@@ -107,7 +107,7 @@ fn verify_password(encoded: &str, password: &str) -> bool {
 }
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 fn unhex(text: &str) -> Result<Vec<u8>, ()> {
-    if text.len() % 2 != 0 { return Err(()); }
+    if !text.is_ascii() || !text.len().is_multiple_of(2) { return Err(()); }
     (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i+2],16).map_err(|_| ())).collect()
 }
 fn normalize_email(raw:&str)->Option<String>{
@@ -163,7 +163,7 @@ pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Ne
             else { true };
         if !role_ok { return (StatusCode::FORBIDDEN, Json(json!({"error":"Your role cannot access this feature"}))).into_response(); }
         if p.role == "user" {
-            let allowed = public || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
+            let allowed = public || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/metadata/detail" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
             if !allowed { return (StatusCode::FORBIDDEN, Json(json!({"error":"User profiles can only browse and watch the library"}))).into_response(); }
         }
         req.extensions_mut().insert(p);
@@ -385,7 +385,7 @@ pub async fn progress_post(State(app): State<App>, headers: HeaderMap, Json(inpu
     let Some(p)=principal(&app.db,&headers) else{return StatusCode::UNAUTHORIZED.into_response()};
     let path=input["path"].as_str().unwrap_or("");let pos=input["position"].as_f64().unwrap_or(-1.0);let dur=input["duration"].as_f64().unwrap_or(-1.0);let completed=input["completed"].as_bool().unwrap_or(false);
     if !crate::is_library_path(&app,path)||!pos.is_finite()||!(0.0..=86400.0).contains(&pos)||!dur.is_finite()||!(0.0..=86400.0).contains(&dur){return (StatusCode::BAD_REQUEST,Json(json!({"error":"Invalid playback progress"}))).into_response()}
-    let completed=completed||(dur>0.0&&pos>=dur-8.0);let now=chrono::Utc::now().timestamp();
+    let completed=completed||(dur>0.0&&pos>=(dur-8.0).max(dur*0.9));let now=chrono::Utc::now().timestamp();
     let result=if completed{conn(&app.db).execute("INSERT INTO profile_watch_progress(profile_id,path,position,duration,updated_at,completed) VALUES(?1,?2,?3,?4,?5,1) ON CONFLICT(profile_id,path) DO UPDATE SET position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,completed=1",params![p.profile_id,path,dur,dur,now])}else{conn(&app.db).execute("INSERT INTO profile_watch_progress(profile_id,path,position,duration,updated_at,completed) VALUES(?1,?2,?3,?4,?5,0) ON CONFLICT(profile_id,path) DO UPDATE SET position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,completed=0",params![p.profile_id,path,pos,dur,now])};
     match result{Ok(_)=>(StatusCode::OK,Json(json!({"ok":true,"completed":completed}))).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response()}
 }

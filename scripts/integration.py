@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
     with socket.socket() as sock: sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     url=f'http://127.0.0.1:{port}'
     log=open(base/'server.log','w')
-    proc=subprocess.Popen([str(ROOT/'target/debug/smart-media-scanner')],cwd=ROOT,env={**os.environ,'SMART_MEDIA_DATA':str(data),'SMART_MEDIA_HOST':'127.0.0.1','SMART_MEDIA_PORT':str(port),'TMDB_TOKEN':''},stdout=log,stderr=log)
+    proc=subprocess.Popen([os.environ.get('PLEXV2_TEST_BINARY',str(ROOT/'target/debug/smart-media-scanner'))],cwd=ROOT,env={**os.environ,'SMART_MEDIA_DATA':str(data),'SMART_MEDIA_HOST':'127.0.0.1','SMART_MEDIA_PORT':str(port),'TMDB_TOKEN':''},stdout=log,stderr=log)
     jar=http.cookiejar.CookieJar(); client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     def request(path, body=None, status=200, headers=None, opener=None):
         req=urllib.request.Request(url+path,data=None if body is None else json.dumps(body).encode(),headers={**({'Content-Type':'application/json'} if body is not None else {}),**(headers or {})})
@@ -85,6 +85,8 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
         api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':3,'end':1}]},status=400)
         assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
+        api('/api/admin/playback/markers',{'path':str(video),'markers':[]})
+        assert api('/api/playback/markers?'+q)=={'configured':True,'markers':[]}
         api('/api/playback/watched',{'paths':[str(video)],'action':'watched'})
         assert api('/api/playback/progress?'+q)['completed']
         api('/api/playback/watched',{'paths':[str(video),'/not/in/library'],'action':'reset'},status=404)
@@ -93,6 +95,10 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert not api('/api/playback/progress?'+q)['completed']
         api('/api/playback/progress',{'path':str(video),'position':1,'duration':12})
         assert api('/api/playback/progress?'+q)['progress']['position']==1
+        api('/api/playback/progress',{'path':str(video),'position':4,'duration':12})
+        assert not api('/api/playback/progress?'+q)['completed'],'short videos must not complete at one third'
+        api('/api/playback/progress',{'path':str(video),'position':11,'duration':12})
+        assert api('/api/playback/progress?'+q)['completed']
         report={'path':str(video),'message':'Synthetic playback report','mode':'transcode','quality':'auto','video_codec':'h264','audio_codec':'aac'}
         api('/api/playback/report',report)
         api('/api/playback/report',report,status=429)
@@ -127,7 +133,11 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         api('/api/admin/health',status=403,opener=viewer)
         api('/api/admin/playback/markers',{'path':str(video),'markers':[]},status=403,opener=viewer)
         request('/assets/hls-1.7.3.js',opener=viewer)
-        api('/api/auth/sessions',opener=viewer)
+        owner_session_id=api('/api/auth/sessions')['items'][0]['id']
+        assert len(api('/api/auth/sessions',opener=viewer)['items'])==1
+        assert api('/api/auth/sessions',{'id':owner_session_id},opener=viewer)['revoked']==0
+        api('/api/auth/me')
+        api('/api/metadata/detail?kind=movie&id=1',opener=viewer)
         if '--browser' in sys.argv: subprocess.run(['node',str(ROOT/'scripts/browser.cjs'),url],check=True,timeout=150)
         print('PASS: isolated HTTP, audio tracks + decoded language, chapters, direct ranges, three HLS variants, validation, atomic watched/reset, profile isolation')
     finally:

@@ -226,7 +226,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                     )
             }) {
                 if let Some(index) = sub["index"].as_u64() {
-                    subtitles.push(json!({"id":format!("embedded:{index}"),"label":format!("{} · {}",sub["tags"]["language"].as_str().unwrap_or("Unknown language"),sub["tags"]["title"].as_str().unwrap_or("Embedded subtitle"))}));
+                    subtitles.push(json!({"id":format!("embedded:{index}"),"language":sub["tags"]["language"],"label":format!("{} · {}",sub["tags"]["language"].as_str().unwrap_or("Unknown language"),sub["tags"]["title"].as_str().unwrap_or("Embedded subtitle"))}));
                 }
             }
             for (i, name) in local_subtitles(&app, &q.path).iter().enumerate() {
