@@ -325,6 +325,8 @@ pub async fn save_user_setting(State(app): State<App>, headers: HeaderMap, Json(
         "audio_language" | "subtitle_language"=>matches!(input.value.as_str(),""|"en"|"hr"|"sl"|"de"|"es"|"fr"|"it"|"ja"|"ko"|"pt"|"ru"|"zh"),
         "subtitle_mode"=>matches!(input.value.as_str(),"off"|"language"|"always"),
         "subtitle_size"=>matches!(input.value.as_str(),"80"|"100"|"120"|"140"),
+        "subtitle_background"=>matches!(input.value.as_str(),"dark"|"transparent"),
+        "subtitle_shadow"=>matches!(input.value.as_str(),"true"|"false"),
         "subtitle_color"=>matches!(input.value.as_str(),"white"|"yellow"|"cyan"),
         "auto_play_next"|"show_continue"|"show_recommendations"|"show_popular"|"reduce_motion"=>matches!(input.value.as_str(),"true"|"false"),
         "continue_limit"=>matches!(input.value.as_str(),"6"|"12"|"24"|"50"),
