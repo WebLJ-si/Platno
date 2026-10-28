@@ -320,6 +320,7 @@ pub async fn save_user_setting(State(app): State<App>, headers: HeaderMap, Json(
     let Some(p)=principal(&app.db,&headers) else{return StatusCode::UNAUTHORIZED.into_response()};
     let valid=match input.key.as_str(){
         "playback_quality"=>matches!(input.value.as_str(),"auto"|"1080"|"720"|"480"),
+        "playback_volume"=>input.value.parse::<f64>().is_ok_and(|n|n.is_finite()&&(0.0..=1.0).contains(&n)),
         "playback_speed"=>matches!(input.value.as_str(),"0.5"|"0.75"|"1"|"1.25"|"1.5"|"2"),
         "audio_language" | "subtitle_language"=>matches!(input.value.as_str(),""|"en"|"hr"|"sl"|"de"|"es"|"fr"|"it"|"ja"|"ko"|"pt"|"ru"|"zh"),
         "subtitle_mode"=>matches!(input.value.as_str(),"off"|"language"|"always"),
