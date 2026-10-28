@@ -13,15 +13,17 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{
-        atomic::{AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicU8, Ordering},
         Arc, LazyLock, Mutex,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::{process::Command, sync::oneshot};
 use tokio_util::io::ReaderStream;
 
 struct Session {
+    profile_id: i64,
+    _permit: tokio::sync::OwnedSemaphorePermit,
     dir: PathBuf,
     last: Instant,
     stop: Option<oneshot::Sender<()>>,
@@ -29,7 +31,7 @@ struct Session {
 }
 static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static COUNTER: AtomicU64 = AtomicU64::new(1);
+static HLS_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(||Arc::new(tokio::sync::Semaphore::new(4)));
 #[derive(Deserialize)]
 pub struct Start {
     path: String,
@@ -56,11 +58,13 @@ fn remove(id: &str) {
         });
     }
 }
-pub async fn stop(Json(input): Json<Stop>) -> Json<serde_json::Value> {
+pub async fn stop(axum::Extension(actor): axum::Extension<crate::auth::Principal>, Json(input): Json<Stop>) -> Response {
+    let owned=SESSIONS.lock().unwrap().get(&input.id).is_some_and(|s|s.profile_id==actor.profile_id);
+    if !owned {return error(StatusCode::NOT_FOUND,"Playback session expired");}
     remove(&input.id);
-    Json(json!({"ok":true}))
+    Json(json!({"ok":true})).into_response()
 }
-pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response {
+pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extension<crate::auth::Principal>, Json(input): Json<Start>) -> Response {
     let Some(path) = playback::library_path(&app, &input.path) else {
         return error(StatusCode::NOT_FOUND, "File is not in the library");
     };
@@ -72,11 +76,11 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     let tiers: Vec<&str> = if quality=="auto" {vec!["480","720","1080"]} else {vec![quality]};
     if tiers.iter().any(|q|playback::video_bitrate(&app,q).is_none()) { return error(StatusCode::BAD_REQUEST,"Invalid quality"); }
     let audio_map = match playback::audio_map(&path, input.audio).await { Ok(v)=>v, Err(e)=>return error(StatusCode::BAD_REQUEST,&e) };
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let id = format!("{:x}{:x}", millis, COUNTER.fetch_add(1, Ordering::Relaxed));
+    let Ok(permit)=HLS_LIMIT.clone().try_acquire_owned() else {return error(StatusCode::TOO_MANY_REQUESTS,"All four HLS conversion slots are busy. Try again shortly.");};
+    use ring::rand::SecureRandom;
+    let mut random=[0u8;32];
+    if ring::rand::SystemRandom::new().fill(&mut random).is_err() {return error(StatusCode::INTERNAL_SERVER_ERROR,"Cannot create playback session");}
+    let id=random.iter().map(|b|format!("{b:02x}")).collect::<String>();
     let dir = std::env::temp_dir().join(format!("smart-media-hls-{id}"));
     if tokio::fs::create_dir(&dir).await.is_err() {
         return error(
@@ -126,6 +130,8 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     SESSIONS.lock().unwrap().insert(
         id.clone(),
         Session {
+            profile_id: actor.profile_id,
+            _permit: permit,
             dir,
             last: Instant::now(),
             stop: Some(tx),
@@ -152,7 +158,7 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     });
     Json(json!({"id":id,"adaptive":adaptive,"url":format!("/api/playback/hls/{id}/{}",if adaptive {"master.m3u8"}else{"index.m3u8"})})).into_response()
 }
-pub async fn file(Path((id, name)): Path<(String, String)>) -> Response {
+pub async fn file(axum::Extension(actor): axum::Extension<crate::auth::Principal>, Path((id, name)): Path<(String, String)>) -> Response {
     if !allowed_name(&name) {
         return error(StatusCode::NOT_FOUND, "Not found");
     }
@@ -161,6 +167,7 @@ pub async fn file(Path((id, name)): Path<(String, String)>) -> Response {
         let Some(session) = sessions.get_mut(&id) else {
             return error(StatusCode::NOT_FOUND, "Playback session expired");
         };
+        if session.profile_id!=actor.profile_id {return error(StatusCode::NOT_FOUND,"Playback session expired");}
         session.last = Instant::now();
         (session.dir.clone(), session.status.clone())
     };
@@ -212,7 +219,7 @@ fn playlist_ready(content: &[u8]) -> bool {
 fn allowed_name(name: &str) -> bool {
     if matches!(name,"index.m3u8"|"master.m3u8"|"v480.m3u8"|"v720.m3u8"|"v1080.m3u8") { return true; }
     let segment=name.strip_prefix("v480-").or_else(||name.strip_prefix("v720-")).or_else(||name.strip_prefix("v1080-")).unwrap_or(name);
-    segment.starts_with("segment") && segment.ends_with(".ts") && segment.len()==16 && segment[7..13].bytes().all(|b|b.is_ascii_digit())
+    segment.strip_prefix("segment").and_then(|s|s.strip_suffix(".ts")).is_some_and(|digits|digits.len()==6&&digits.bytes().all(|b|b.is_ascii_digit()))
 }
 #[cfg(test)]
 mod tests {
@@ -229,6 +236,8 @@ mod tests {
     }
     #[test]
     fn only_playlist_and_numbered_segments_are_accessible() {
+        assert!(!allowed_name("segmentaaaaé.ts"));
+        assert!(allowed_name("v480-segment000001.ts"));
         assert!(allowed_name("index.m3u8"));
         assert!(allowed_name("segment000123.ts"));
         assert!(!allowed_name("../index.m3u8"));
