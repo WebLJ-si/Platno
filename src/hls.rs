@@ -68,9 +68,9 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     if !start.is_finite() || !(0.0..=1_000_000.0).contains(&start) {
         return error(StatusCode::BAD_REQUEST, "Invalid playback position");
     }
-    let Some((width, height, rate)) = playback::video_bitrate(&app, input.quality.as_deref().unwrap_or("1080")) else {
-        return error(StatusCode::BAD_REQUEST, "Invalid quality");
-    };
+    let quality=input.quality.as_deref().unwrap_or("1080");
+    let tiers: Vec<&str> = if quality=="auto" {vec!["480","720","1080"]} else {vec![quality]};
+    if tiers.iter().any(|q|playback::video_bitrate(&app,q).is_none()) { return error(StatusCode::BAD_REQUEST,"Invalid quality"); }
     let audio_map = match playback::audio_map(&path, input.audio).await { Ok(v)=>v, Err(e)=>return error(StatusCode::BAD_REQUEST,&e) };
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -84,66 +84,31 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
             "Cannot create streaming cache",
         );
     }
-    let scale=format!("scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
     let (encoder,_available)=playback::h264_encoder(&app).await;
-    let segments = dir.join("segment%06d.ts");
-    let playlist = dir.join("index.m3u8");
     let mut command = Command::new(playback::binary("ffmpeg"));
-    command
-        .args([
-            "-v",
-            "error",
-            "-nostdin",
-            "-re",
-            "-ss",
-            &format!("{start:.3}"),
-            "-i",
-        ])
-        .arg(path)
-        .args([
-            "-map",
-            "0:v:0",
-            "-map",
-            &audio_map,
-        ])
-        .args(playback::encoder_options(&encoder))
-        .args([
-            "-pix_fmt",
-            "yuv420p",
-            "-vf",
-            &scale,
-            "-b:v",
-            &rate,
-            "-maxrate",
-            &rate,
-            "-bufsize",
-            "12000k",
-            "-force_key_frames",
-            "expr:gte(t,n_forced*2)",
-            "-c:a",
-            "aac",
-            "-ac",
-            "2",
-            "-b:a",
-            "160k",
-            "-f",
-            "hls",
-            "-hls_time",
-            "2",
-            "-hls_list_size",
-            "10",
-            "-hls_delete_threshold",
-            "3",
-            "-hls_flags",
-            "delete_segments+temp_file+independent_segments",
-            "-hls_segment_filename",
-        ])
-        .arg(segments)
-        .arg(playlist)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+    command.args(["-v","error","-nostdin","-re","-ss",&format!("{start:.3}"),"-i"]).arg(&path);
+    let adaptive=quality=="auto";
+    let mut master=String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
+    for tier in tiers {
+        let (width,height,rate)=playback::video_bitrate(&app,tier).unwrap();
+        let scale=format!("scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
+        let prefix=if adaptive {format!("v{tier}-")}else{String::new()};
+        let playlist=if adaptive {format!("v{tier}.m3u8")}else{"index.m3u8".into()};
+        command.args(["-map","0:v:0","-map",&audio_map])
+            .args(playback::encoder_options(&encoder))
+            .args(["-pix_fmt","yuv420p","-vf",&scale,"-b:v",&rate,"-maxrate",&rate,"-bufsize","12000k",
+                   "-force_key_frames","expr:gte(t,n_forced*2)","-sc_threshold","0",
+                   "-c:a","aac","-ac","2","-b:a","160k","-f","hls","-hls_time","2","-hls_list_size","10",
+                   "-hls_delete_threshold","3","-hls_flags","delete_segments+temp_file+independent_segments","-hls_segment_filename"])
+            .arg(dir.join(format!("{prefix}segment%06d.ts"))).arg(dir.join(&playlist));
+        let bandwidth=rate.trim_end_matches('k').parse::<u32>().unwrap_or(6000)*1200+192_000;
+        master.push_str(&format!("#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}\n{playlist}\n"));
+    }
+    if adaptive && tokio::fs::write(dir.join("master.m3u8"),master).await.is_err() {
+        let _=tokio::fs::remove_dir_all(&dir).await;
+        return error(StatusCode::INTERNAL_SERVER_ERROR,"Cannot create adaptive playlist");
+    }
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(_) => {
@@ -184,7 +149,7 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
             }
         }
     });
-    Json(json!({"id":id,"url":format!("/api/playback/hls/{id}/index.m3u8")})).into_response()
+    Json(json!({"id":id,"adaptive":adaptive,"url":format!("/api/playback/hls/{id}/{}",if adaptive {"master.m3u8"}else{"index.m3u8"})})).into_response()
 }
 pub async fn file(Path((id, name)): Path<(String, String)>) -> Response {
     if !allowed_name(&name) {
@@ -199,10 +164,10 @@ pub async fn file(Path((id, name)): Path<(String, String)>) -> Response {
         (session.dir.clone(), session.status.clone())
     };
     let path = dir.join(&name);
-    if name == "index.m3u8" {
+    if name.ends_with(".m3u8") {
         for _ in 0..600 {
             match tokio::fs::read(&path).await {
-                Ok(content) if playlist_ready(&content) => {
+                Ok(content) if name=="master.m3u8" || playlist_ready(&content) => {
                     return (
                         [
                             (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
@@ -244,11 +209,9 @@ fn playlist_ready(content: &[u8]) -> bool {
 }
 
 fn allowed_name(name: &str) -> bool {
-    name == "index.m3u8"
-        || (name.starts_with("segment")
-            && name.ends_with(".ts")
-            && name.len() == 16
-            && name[7..13].bytes().all(|b| b.is_ascii_digit()))
+    if matches!(name,"index.m3u8"|"master.m3u8"|"v480.m3u8"|"v720.m3u8"|"v1080.m3u8") { return true; }
+    let segment=name.strip_prefix("v480-").or_else(||name.strip_prefix("v720-")).or_else(||name.strip_prefix("v1080-")).unwrap_or(name);
+    segment.starts_with("segment") && segment.ends_with(".ts") && segment.len()==16 && segment[7..13].bytes().all(|b|b.is_ascii_digit())
 }
 #[cfg(test)]
 mod tests {
