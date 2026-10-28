@@ -84,6 +84,7 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
             "Cannot create streaming cache",
         );
     }
+    let hdr=match playback::hdr_filter(&path).await {Ok(v)=>v,Err(e)=>{let _=tokio::fs::remove_dir_all(&dir).await;return error(StatusCode::BAD_GATEWAY,&e)}};
     let (encoder,_available)=playback::h264_encoder(&app).await;
     let mut command = Command::new(playback::binary("ffmpeg"));
     command.args(["-v","error","-nostdin","-re","-ss",&format!("{start:.3}"),"-i"]).arg(&path);
@@ -91,7 +92,7 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     let mut master=String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
     for tier in tiers {
         let (width,height,rate)=playback::video_bitrate(&app,tier).unwrap();
-        let scale=format!("scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
+        let scale=format!("{hdr}scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
         let prefix=if adaptive {format!("v{tier}-")}else{String::new()};
         let playlist=if adaptive {format!("v{tier}.m3u8")}else{"index.m3u8".into()};
         command.args(["-map","0:v:0","-map",&audio_map])

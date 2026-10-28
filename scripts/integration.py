@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
     video=base/'fixture.mkv'
     run('ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24:duration=12','-f','lavfi','-i','sine=frequency=440:duration=12','-f','lavfi','-i','sine=frequency=880:duration=12','-i',str(sub),'-i',str(meta),'-map','0:v','-map','1:a','-map','2:a','-map','3:s','-map_metadata','4','-map_chapters','4','-c:v','libx264','-preset','ultrafast','-c:a','aac','-c:s','srt','-metadata:s:a:0','language=eng','-metadata:s:a:1','language=slv',str(video))
     direct=base/'direct.mp4';run('ffmpeg','-v','error','-i',str(video),'-map','0:v','-map','0:a:0','-c','copy',str(direct))
+    hdr=base/'hdr.mkv';run('ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=160x90:rate=24:duration=3','-vf','format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc','-c:v','libx264','-preset','ultrafast',str(hdr))
     with socket.socket() as sock: sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     url=f'http://127.0.0.1:{port}'
     log=open(base/'server.log','w')
@@ -33,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         api('/api/playback/info?path=nope',status=401,opener=urllib.request.build_opener())
         api('/api/auth/setup',{'email':'owner@example.test','password':'integration password 123','confirm_password':'integration password 123'})
         db=sqlite3.connect(data/'library.sqlite3')
-        for n,path in enumerate([video,direct]):
+        for n,path in enumerate([video,direct,hdr]):
             result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','subtitles':[]}
             db.execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES(?,?,?,?,?,?,?)",(str(path),str(base),path.stat().st_size,0,'{}',json.dumps(result),'2026-10-29'))
             db.execute('INSERT INTO library_files(path,library_id) VALUES(?,(SELECT id FROM libraries WHERE kind=\'movie\' LIMIT 1))',(str(path),))
@@ -65,6 +66,15 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
             assert 800<frequency<950,('selected second audio track frequency',frequency)
         api('/api/playback/hls/stop',{'id':hls['id']})
         request(hls['url'],status=404)
+        assert api('/api/playback/info?'+urlencode({'path':str(hdr)}))['hdr'] is True
+        hdr_session=api('/api/playback/hls/start',{'path':str(hdr),'quality':'480'})
+        hdr_playlist=request(hdr_session['url'])[0].decode()
+        hdr_segment=next(x for x in hdr_playlist.splitlines() if x and not x.startswith('#'))
+        hdr_ts=base/'hdr-output.ts';hdr_ts.write_bytes(request(hdr_session['url'].rsplit('/',1)[0]+'/'+hdr_segment)[0])
+        hdr_probe=json.loads(run('ffprobe','-v','error','-show_streams','-of','json',str(hdr_ts)).stdout)
+        assert hdr_probe['streams'][0]['color_transfer']=='bt709',hdr_probe
+        run('ffmpeg','-v','error','-i',str(hdr_ts),'-f','null','-')
+        api('/api/playback/hls/stop',{'id':hdr_session['id']})
         api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':0,'end':3}]})
         assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
         api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':3,'end':1}]},status=400)

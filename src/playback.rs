@@ -205,7 +205,8 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
             }
             let audio = streams.iter().find(|x| x["codec_type"] == "audio");
             let format = data["format"]["format_name"].as_str().unwrap_or("");
-            let direct = format.split(',').any(|s| s == "mp4" || s == "mov")
+            let hdr = video.is_some_and(|x|matches!(x["color_transfer"].as_str(),Some("smpte2084"|"arib-std-b67")));
+            let direct = !hdr && format.split(',').any(|s| s == "mp4" || s == "mov")
                 && video.is_some_and(|x| x["codec_name"] == "h264")
                 && audio.is_none_or(|x| x["codec_name"] == "aac");
             let duration = data["format"]["duration"]
@@ -233,7 +234,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                     subtitles.push(json!({"id":format!("file:{i}"),"label":name}));
                 }
             }
-            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"chapters":data["chapters"],"bit_rate":data["format"]["bit_rate"]})).into_response()
+            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"hdr":hdr,"chapters":data["chapters"],"bit_rate":data["format"]["bit_rate"]})).into_response()
         }
     }
 }
@@ -321,6 +322,11 @@ pub async fn direct(
         )))
         .unwrap()
 }
+pub(crate) async fn hdr_filter(path: &std::path::Path) -> Result<String, String> {
+    let data=probe_file(path).await?;
+    let hdr=data["streams"].as_array().is_some_and(|s|s.iter().any(|x|x["codec_type"]=="video"&&matches!(x["color_transfer"].as_str(),Some("smpte2084"|"arib-std-b67"))));
+    Ok(if hdr {"zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,".into()} else {String::new()})
+}
 pub(crate) async fn audio_map(path: &std::path::Path, audio: Option<u32>) -> Result<String, String> {
     let Some(index) = audio else { return Ok("0:a:0?".into()); };
     let data = probe_file(path).await?;
@@ -342,7 +348,8 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
     let Some((width, height, rate)) = video_bitrate(&app, q.quality.as_deref().unwrap_or("1080")) else {
         return fail(StatusCode::BAD_REQUEST, "Invalid quality");
     };
-    let scale=format!("scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
+    let hdr=match hdr_filter(&path).await {Ok(v)=>v,Err(e)=>return fail(StatusCode::BAD_GATEWAY,&e)};
+    let scale=format!("{hdr}scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
     let audio_map = match audio_map(&path, q.audio).await { Ok(v)=>v, Err(e)=>return fail(StatusCode::BAD_REQUEST,&e) };
     let (encoder,_available)=h264_encoder(&app).await;
     let mut cmd = Command::new(binary("ffmpeg"));
