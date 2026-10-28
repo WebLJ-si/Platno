@@ -1,0 +1,8 @@
+.git
+.env
+.env.*
+target
+output
+tmp
+node_modules
+*.sqlite3*

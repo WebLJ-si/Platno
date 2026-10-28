@@ -1,0 +1,55 @@
+# Deployment
+
+The application defaults to localhost. Create the owner account locally before granting remote network access. Keep server credentials and provider tokens outside Git.
+
+## Docker
+
+Install Docker Engine or Docker Desktop, then run from the repository:
+
+```sh
+export PLEXV2_MEDIA_DIR=/absolute/path/to/media
+docker compose up -d --build
+```
+
+Open `http://127.0.0.1:8787`. Scan `/media` from Settings. The media mount is read-only; SQLite and private provider configuration are in the `plexv2-data` volume. The container runs as UID 10001: its media directory must be readable by that UID. When binding an existing data directory, make it writable by that UID too. Source paths imported from a host database must use the container's `/media` paths to play correctly. GPU pass-through is platform-specific; software conversion always remains available. Adaptive HLS encodes three renditions concurrently and needs more CPU than fixed quality.
+
+To update, pull the repository and run `docker compose up -d --build` again. Keep the data volume. Owner recovery uses `docker compose exec -it plexv2 smart-media-scanner reset-owner-password`. No public container registry image is published by this repository.
+
+## HTTPS reverse proxy
+
+Use a domain whose DNS points to your server and install Caddy. Copy `deploy/Caddyfile.example`, replace `media.example.com` with your domain, and run Caddy as a service. Keep the application's port bound to localhost; expose only the proxy. Caddy manages HTTPS certificates for eligible public domains. Set `SMART_MEDIA_COOKIE_SECURE=1` before starting the app behind HTTPS (for Compose: export it, then recreate the container). Secure cookies require HTTPS; plain HTTP sign-in will stop working with that setting.
+
+The example streams responses immediately and preserves same-origin byte ranges, HLS, and cookie authentication. If Caddy runs in another container, use a shared Docker network and proxy to `plexv2:8787`, rather than localhost. Do not add permissive CORS or cache authenticated API/media responses at the proxy.
+
+A private VPN such as Tailscale is another deployment option. Set it up on your own devices, make the localhost service reachable through your VPN/proxy configuration, and use HTTPS for installed PWA access. This project does not automatically provision tunnels, open router ports, or create external accounts.
+
+Sources: [Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy), [Dockerfile reference](https://docs.docker.com/reference/dockerfile/).
+
+## Native service
+
+Build with `cargo build --release --locked`. Run the absolute binary path under your OS service manager with `SMART_MEDIA_DATA` set to a persistent directory outside the media roots, and a PATH containing FFmpeg and ffprobe. Set the working directory and environment explicitly; service managers do not inherit your interactive shell. Linux systemd example:
+
+```ini
+[Unit]
+Description=PlexV2 media server
+After=network-online.target
+
+[Service]
+User=media
+ExecStart=/opt/plexv2/smart-media-scanner
+Environment=SMART_MEDIA_DATA=/var/lib/plexv2
+Environment=SMART_MEDIA_HOST=127.0.0.1
+Environment=SMART_MEDIA_COOKIE_SECURE=1
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create the service user and writable data directory first. Set `SMART_MEDIA_COOKIE_SECURE=0` for a local HTTP-only setup. macOS can use launchd with the same absolute binary and explicit environment; Windows can run the binary in a terminal or an independently configured service wrapper. No service is installed automatically.
+
+## Backup and recovery
+
+Stop the service before copying the entire data directory, including SQLite and private provider files, to access-controlled backup storage. Restore with the service stopped and preserve file ownership. Never copy only the SQLite file while it is live in WAL mode. Live database backup/restore from the UI is not implemented. The PWA offline page explains a lost connection; video downloads and offline viewing are not implemented.

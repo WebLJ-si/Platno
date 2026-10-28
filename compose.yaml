@@ -1,0 +1,13 @@
+services:
+  plexv2:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      SMART_MEDIA_COOKIE_SECURE: "${SMART_MEDIA_COOKIE_SECURE:-0}"
+    volumes:
+      - plexv2-data:/data
+      - "${PLEXV2_MEDIA_DIR:?Set PLEXV2_MEDIA_DIR to your absolute media directory}:/media:ro"
+volumes:
+  plexv2-data:
