@@ -40,6 +40,19 @@ pub(crate) fn library_path(app: &App, path: &str) -> Option<PathBuf> {
 fn fail(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({"error":message}))).into_response()
 }
+pub(crate) fn video_bitrate(app: &App, quality: &str) -> Option<(u32, u32, String)> {
+    let (width, height, base_rate) = match quality {
+        "480" => (854, 480, 1200u32),
+        "720" => (1280, 720, 3000u32),
+        "1080" => (1920, 1080, 6000u32),
+        _ => return None,
+    };
+    let balance: String = db(app)
+        .query_row("SELECT value FROM server_settings WHERE key='transcode_quality'", [], |r| r.get(0))
+        .unwrap_or_else(|_| "balanced".into());
+    let multiplier = match balance.as_str() { "speed" => 0.7, "quality" => 1.5, _ => 1.0 };
+    Some((width, height, format!("{}k", (base_rate as f64 * multiplier) as u32)))
+}
 pub(crate) fn binary(name: &str) -> String {
     let var = if name == "ffmpeg" {
         "SMART_MEDIA_FFMPEG"
@@ -313,11 +326,8 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
     if tokio::fs::metadata(&path).await.is_err() {
         return fail(StatusCode::NOT_FOUND, "The video file is unavailable");
     }
-    let (width, height, rate) = match q.quality.as_deref().unwrap_or("1080") {
-        "480" => (854, 480, "1200k"),
-        "720" => (1280, 720, "3000k"),
-        "1080" => (1920, 1080, "6000k"),
-        _ => return fail(StatusCode::BAD_REQUEST, "Invalid quality"),
+    let Some((width, height, rate)) = video_bitrate(&app, q.quality.as_deref().unwrap_or("1080")) else {
+        return fail(StatusCode::BAD_REQUEST, "Invalid quality");
     };
     let scale=format!("scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
     let (encoder,_available)=h264_encoder(&app).await;
@@ -344,9 +354,9 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
         "-vf",
         &scale,
         "-b:v",
-        rate,
+        &rate,
         "-maxrate",
-        rate,
+        &rate,
         "-bufsize",
         "12000k",
         "-g",

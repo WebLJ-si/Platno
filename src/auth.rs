@@ -7,7 +7,7 @@ use axum::{
     Json,
 };
 use ring::{digest, pbkdf2, rand::{SecureRandom, SystemRandom}};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{num::NonZeroU32, path::PathBuf, time::Duration};
@@ -29,13 +29,17 @@ pub struct Principal {
 }
 
 #[derive(Deserialize)]
-pub struct Credentials { pub email: String, pub password: String, pub display_name: Option<String> }
+pub struct Credentials { pub email: String, pub password: String, pub confirm_password: Option<String>, pub display_name: Option<String> }
 #[derive(Deserialize)]
-pub struct ProfileInput { pub name: String }
+pub struct ProfileInput { pub name: String, pub pin: String, pub confirm_pin: String }
 #[derive(Deserialize)]
-pub struct AccountInput { pub email: String, pub password: String, pub display_name: Option<String>, pub role: Option<String> }
+pub struct ProfileSwitchInput { pub profile_id: i64, pub pin: String, pub confirm_pin: Option<String> }
 #[derive(Deserialize)]
-pub struct OwnerCredentialsInput { pub account_id: i64, pub email: String, pub password: String }
+pub struct WatchlistInput { pub path: String, pub enabled: bool }
+#[derive(Deserialize)]
+pub struct AccountInput { pub email: String, pub password: String, pub confirm_password: String, pub display_name: Option<String>, pub role: Option<String> }
+#[derive(Deserialize)]
+pub struct OwnerCredentialsInput { pub account_id: i64, pub email: String, pub password: String, pub confirm_password: String, pub current_owner_password: Option<String> }
 #[derive(Deserialize)]
 pub struct SettingInput { pub key: String, pub value: String }
 #[derive(Deserialize)]
@@ -53,10 +57,12 @@ pub fn init(path: &PathBuf) {
     c.execute_batch("PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY, username TEXT NOT NULL COLLATE NOCASE UNIQUE, email TEXT COLLATE NOCASE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('owner','admin','user')), created_at INTEGER NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS accounts_single_owner ON accounts(role) WHERE role='owner';
-      CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE, created_at INTEGER NOT NULL, UNIQUE(account_id,name));
+      CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE, pin_hash TEXT, created_at INTEGER NOT NULL, UNIQUE(account_id,name));
+      CREATE TABLE IF NOT EXISTS profile_pin_attempts(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, attempts INTEGER NOT NULL, window_started INTEGER NOT NULL, blocked_until INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS auth_sessions(token_hash TEXT PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS auth_login_attempts(username TEXT PRIMARY KEY COLLATE NOCASE, attempts INTEGER NOT NULL, window_started INTEGER NOT NULL, blocked_until INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS profile_watch_progress(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, path TEXT NOT NULL, position REAL NOT NULL, duration REAL NOT NULL, updated_at INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(profile_id,path));
+      CREATE TABLE IF NOT EXISTS profile_watchlist(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, path TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY(profile_id,path));
       CREATE TABLE IF NOT EXISTS profile_settings(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(profile_id,key));
       CREATE TABLE IF NOT EXISTS server_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS playback_activity(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, path TEXT NOT NULL, position REAL NOT NULL DEFAULT 0, duration REAL NOT NULL DEFAULT 0, mode TEXT NOT NULL DEFAULT 'direct', active INTEGER NOT NULL DEFAULT 1, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(profile_id,path));
@@ -64,6 +70,8 @@ pub fn init(path: &PathBuf) {
       CREATE INDEX IF NOT EXISTS playback_activity_active ON playback_activity(active,updated_at);").unwrap();
     let has_email: bool = c.prepare("PRAGMA table_info(accounts)").and_then(|mut s|s.query_map([],|r|r.get::<_,String>(1))?.collect::<Result<Vec<_>,_>>()).map(|v|v.iter().any(|x|x=="email")).unwrap_or(false);
     if !has_email { let _=c.execute_batch("ALTER TABLE accounts ADD COLUMN email TEXT COLLATE NOCASE;"); }
+    let has_pin: bool = c.prepare("PRAGMA table_info(profiles)").and_then(|mut s|s.query_map([],|r|r.get::<_,String>(1))?.collect::<Result<Vec<_>,_>>()).map(|v|v.iter().any(|x|x=="pin_hash")).unwrap_or(false);
+    if !has_pin { let _=c.execute_batch("ALTER TABLE profiles ADD COLUMN pin_hash TEXT;"); }
     let _=c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique ON accounts(email) WHERE email IS NOT NULL;");
     let _=c.execute("UPDATE accounts SET email=lower(username) WHERE email IS NULL AND instr(username,'@')>1",[]);
 }
@@ -79,6 +87,14 @@ fn hash_password(password: &str) -> Result<String, ()> {
     rng.fill(&mut salt).map_err(|_| ())?;
     let mut out = [0u8; 32];
     pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, NonZeroU32::new(ROUNDS).unwrap(), &salt, password.as_bytes(), &mut out);
+    Ok(format!("pbkdf2${ROUNDS}${}${}", hex(&salt), hex(&out)))
+}
+fn valid_pin(pin: &str) -> bool { (4..=8).contains(&pin.len()) && pin.bytes().all(|b| b.is_ascii_digit()) }
+fn hash_pin(pin: &str) -> Result<String, ()> {
+    if !valid_pin(pin) { return Err(()); }
+    let rng = SystemRandom::new(); let mut salt = [0u8; 16]; rng.fill(&mut salt).map_err(|_| ())?;
+    let mut out = [0u8; 32];
+    pbkdf2::derive(pbkdf2::PBKDF2_HMAC_SHA256, NonZeroU32::new(ROUNDS).unwrap(), &salt, pin.as_bytes(), &mut out);
     Ok(format!("pbkdf2${ROUNDS}${}${}", hex(&salt), hex(&out)))
 }
 fn verify_password(encoded: &str, password: &str) -> bool {
@@ -147,7 +163,7 @@ pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Ne
             else { true };
         if !role_ok { return (StatusCode::FORBIDDEN, Json(json!({"error":"Your role cannot access this feature"}))).into_response(); }
         if p.role == "user" {
-            let allowed = uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || matches!(uri, "/api/server/info" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
+            let allowed = uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
             if !allowed { return (StatusCode::FORBIDDEN, Json(json!({"error":"User profiles can only browse and watch the library"}))).into_response(); }
         }
         req.extensions_mut().insert(p);
@@ -161,6 +177,7 @@ pub async fn setup_status(State(app): State<App>) -> Json<Value> {
     Json(json!({"configured":has_accounts(&app.db)}))
 }
 pub async fn setup(State(app): State<App>, Json(input): Json<Credentials>) -> Response {
+    if input.confirm_password.as_deref()!=Some(input.password.as_str()) { return (StatusCode::BAD_REQUEST,Json(json!({"error":"The password entries do not match"}))).into_response(); }
     let Some(email)=normalize_email(&input.email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a valid email address"}))).into_response()};
     let Some(username)=account_name(input.display_name.as_deref(),&email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Display names must be at most 64 characters"}))).into_response()};
     let password=input.password;
@@ -206,20 +223,42 @@ pub async fn logout(State(app): State<App>, headers: HeaderMap) -> Response {
 }
 pub async fn me(State(app): State<App>, headers: HeaderMap) -> Response {
     let Some(p)=principal(&app.db,&headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
-    let profiles:Vec<Value>=conn(&app.db).prepare("SELECT id,name FROM profiles WHERE account_id=?1 ORDER BY id").and_then(|mut s|s.query_map([p.account_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?})))?.collect()).unwrap_or_default();
+    let profiles:Vec<Value>=conn(&app.db).prepare("SELECT id,name,pin_hash IS NOT NULL FROM profiles WHERE account_id=?1 ORDER BY id").and_then(|mut s|s.query_map([p.account_id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"pin_set":r.get::<_,bool>(2)?})))?.collect()).unwrap_or_default();
     Json(json!({"account_id":p.account_id,"username":p.username,"email":p.email,"role":p.role,"profile_id":p.profile_id,"profile_name":p.profile_name,"profiles":profiles})).into_response()
 }
 pub async fn profiles(State(app): State<App>, headers: HeaderMap, Json(input): Json<ProfileInput>) -> Response {
     let Some(p)=principal(&app.db,&headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
     let name=input.name.trim();
     if name.is_empty()||name.len()>48||name.chars().any(char::is_control) { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Profile names must be 1–48 characters"}))).into_response(); }
-    match conn(&app.db).execute("INSERT INTO profiles(account_id,name,created_at) VALUES(?1,?2,?3)",params![p.account_id,name,chrono::Utc::now().timestamp()]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"A profile with that name already exists"}))).into_response() }
+    if input.pin != input.confirm_pin { return (StatusCode::BAD_REQUEST,Json(json!({"error":"The profile PIN entries do not match"}))).into_response(); }
+    let Ok(hash)=hash_pin(&input.pin) else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a 4–8 digit profile PIN"}))).into_response(); };
+    match conn(&app.db).execute("INSERT INTO profiles(account_id,name,pin_hash,created_at) VALUES(?1,?2,?3,?4)",params![p.account_id,name,hash,chrono::Utc::now().timestamp()]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"A profile with that name already exists"}))).into_response() }
 }
-pub async fn switch_profile(State(app): State<App>, headers: HeaderMap, Json(input): Json<Value>) -> Response {
+pub async fn switch_profile(State(app): State<App>, headers: HeaderMap, Json(input): Json<ProfileSwitchInput>) -> Response {
     let Some(p)=principal(&app.db,&headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
-    let Some(id)=input["profile_id"].as_i64() else { return StatusCode::BAD_REQUEST.into_response(); };
-    let exists:bool=conn(&app.db).query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 AND account_id=?2)",params![id,p.account_id],|r|r.get(0)).unwrap_or(false);
-    if !exists { return StatusCode::NOT_FOUND.into_response(); }
+    let id=input.profile_id;
+    let c=conn(&app.db);
+    let pin_hash:Option<String>=c.query_row("SELECT pin_hash FROM profiles WHERE id=?1 AND account_id=?2",params![id,p.account_id],|r|r.get(0)).optional().unwrap_or(None);
+    if let Some(pin_hash)=pin_hash {
+        let now=chrono::Utc::now().timestamp();
+        let blocked:i64=c.query_row("SELECT blocked_until FROM profile_pin_attempts WHERE profile_id=?1",[id],|r|r.get(0)).unwrap_or(0);
+        if blocked>now { return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Too many incorrect PIN attempts. Try again in 15 minutes."}))).into_response(); }
+        let supplied=input.pin;
+        let hash=pin_hash;
+        if !tokio::task::spawn_blocking(move || verify_password(&hash,&supplied)).await.unwrap_or(false) {
+            let (attempts,started):(i64,i64)=c.query_row("SELECT attempts,window_started FROM profile_pin_attempts WHERE profile_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?))).unwrap_or((0,now));
+            let attempts=if now-started>900 {1}else{attempts+1}; let blocked_until=if attempts>=5 {now+900}else{0};
+            let _=c.execute("INSERT INTO profile_pin_attempts(profile_id,attempts,window_started,blocked_until) VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET attempts=excluded.attempts,window_started=excluded.window_started,blocked_until=excluded.blocked_until",params![id,attempts,if attempts==1{now}else{started},blocked_until]);
+            return (StatusCode::FORBIDDEN,Json(json!({"error":"Incorrect profile PIN"}))).into_response();
+        }
+        let _=c.execute("DELETE FROM profile_pin_attempts WHERE profile_id=?1",[id]);
+    } else {
+        let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 AND account_id=?2)",params![id,p.account_id],|r|r.get(0)).unwrap_or(false);
+        if !exists { return StatusCode::NOT_FOUND.into_response(); }
+        if input.pin!=input.confirm_pin.as_deref().unwrap_or("") { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Set and confirm a PIN for this profile before switching"}))).into_response(); }
+        let Ok(hash)=hash_pin(&input.pin) else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a 4–8 digit profile PIN"}))).into_response(); };
+        if c.execute("UPDATE profiles SET pin_hash=?1 WHERE id=?2 AND account_id=?3 AND pin_hash IS NULL",params![hash,id,p.account_id]).unwrap_or(0)!=1 { return StatusCode::CONFLICT.into_response(); }
+    }
     if let Some(t)=request_token(&headers) { let _=conn(&app.db).execute("UPDATE auth_sessions SET profile_id=?1 WHERE token_hash=?2",params![id,token_hash(&t)]); }
     Json(json!({"ok":true})).into_response()
 }
@@ -228,6 +267,7 @@ pub async fn admin_accounts(State(app): State<App>) -> Json<Value> {
     Json(json!({"accounts":rows}))
 }
 pub async fn create_account(State(app): State<App>, axum::Extension(actor): axum::Extension<Principal>, Json(input): Json<AccountInput>) -> Response {
+    if input.password!=input.confirm_password { return (StatusCode::BAD_REQUEST,Json(json!({"error":"The password entries do not match"}))).into_response(); }
     let Some(email)=normalize_email(&input.email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a valid email address"}))).into_response()};
     let Some(username)=account_name(input.display_name.as_deref(),&email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Display names must be at most 64 characters"}))).into_response()};
     let role=input.role.as_deref().unwrap_or("user");
@@ -250,12 +290,18 @@ pub fn reset_owner_credentials(path:&PathBuf,email:&str,password:&str)->Result<(
     Ok(())
 }
 pub async fn update_account_credentials(State(app): State<App>, axum::Extension(actor): axum::Extension<Principal>, Json(input): Json<OwnerCredentialsInput>) -> Response {
+    if input.password!=input.confirm_password { return (StatusCode::BAD_REQUEST,Json(json!({"error":"The password entries do not match"}))).into_response(); }
     let Some(email)=normalize_email(&input.email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a valid email address"}))).into_response()};
+    let account:Option<(String,String)>=conn(&app.db).query_row("SELECT role,password_hash FROM accounts WHERE id=?1",[input.account_id],|r|Ok((r.get(0)?,r.get(1)?))).ok();
+    let Some((role,stored_hash))=account else{return StatusCode::NOT_FOUND.into_response()};
+    if role=="owner" && input.account_id==actor.account_id {
+        let Some(current)=input.current_owner_password.clone() else{return (StatusCode::FORBIDDEN,Json(json!({"error":"Enter the current owner password. If it is forgotten, reset it from the server shell."}))).into_response()};
+        let verified=tokio::task::spawn_blocking(move||verify_password(&stored_hash,&current)).await.unwrap_or(false);
+        if !verified{return (StatusCode::FORBIDDEN,Json(json!({"error":"The current owner password is incorrect. If it is forgotten, reset it from the server shell."}))).into_response()}
+    }
     let password=input.password;
     let Ok(Ok(hash))=tokio::task::spawn_blocking(move||hash_password(&password)).await else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Passwords must be 12–1024 characters"}))).into_response()};
     let c=conn(&app.db);
-    let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",[input.account_id],|r|r.get(0)).unwrap_or(false);
-    if !exists{return StatusCode::NOT_FOUND.into_response()}
     match c.execute("UPDATE accounts SET email=?1,password_hash=?2 WHERE id=?3",params![email,hash,input.account_id]){
         Ok(_)=>{let _=c.execute("DELETE FROM auth_sessions WHERE account_id=?1",[input.account_id]);Json(json!({"ok":true,"login_again":input.account_id==actor.account_id})).into_response()},
         Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"That email is already used by another account"}))).into_response()
@@ -276,6 +322,9 @@ pub async fn save_user_setting(State(app): State<App>, headers: HeaderMap, Json(
         "playback_quality"=>matches!(input.value.as_str(),"auto"|"1080"|"720"|"480"),
         "playback_speed"=>matches!(input.value.as_str(),"0.5"|"0.75"|"1"|"1.25"|"1.5"|"2"),
         "subtitle_language"=>matches!(input.value.as_str(),""|"en"|"hr"|"sl"|"de"|"es"|"fr"|"it"|"ja"|"ko"|"pt"|"ru"|"zh"),
+        "subtitle_mode"=>matches!(input.value.as_str(),"off"|"language"|"always"),
+        "subtitle_size"=>matches!(input.value.as_str(),"80"|"100"|"120"|"140"),
+        "subtitle_color"=>matches!(input.value.as_str(),"white"|"yellow"|"cyan"),
         "auto_play_next"|"show_continue"|"show_recommendations"|"show_popular"|"reduce_motion"=>matches!(input.value.as_str(),"true"|"false"),
         "continue_limit"=>matches!(input.value.as_str(),"6"|"12"|"24"|"50"),
         "accent_color"=>matches!(input.value.as_str(),"amber"|"blue"|"mint"),
@@ -296,6 +345,10 @@ pub async fn save_server_setting(State(app): State<App>, Json(input): Json<Setti
         let name=input.value.trim();
         if name.is_empty()||name.chars().count()>48||name.chars().any(char::is_control){return (StatusCode::BAD_REQUEST,Json(json!({"error":"Server name must be 1–48 characters"}))).into_response()}
         return match conn(&app.db).execute("INSERT INTO server_settings(key,value) VALUES('friendly_name',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[name]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+    }
+    if input.key=="transcode_quality" {
+        if !matches!(input.value.as_str(),"speed"|"balanced"|"quality") { return StatusCode::BAD_REQUEST.into_response(); }
+        return match conn(&app.db).execute("INSERT INTO server_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![input.key,input.value]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
     }
     if input.key!="hardware_encoder"||input.value.len()>64{return StatusCode::BAD_REQUEST.into_response()}
     let available=crate::playback::available_h264_encoders().await;
@@ -334,12 +387,28 @@ pub async fn progress_post(State(app): State<App>, headers: HeaderMap, Json(inpu
     match result{Ok(_)=>(StatusCode::OK,Json(json!({"ok":true,"completed":completed}))).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response()}
 }
 
+pub async fn watchlist_get(State(app): State<App>, headers: HeaderMap) -> Response {
+    let Some(p)=principal(&app.db,&headers) else{return StatusCode::UNAUTHORIZED.into_response()};
+    let items:Vec<Value>=conn(&app.db).prepare("SELECT w.path,w.added_at,f.result FROM profile_watchlist w JOIN files f ON f.path=w.path WHERE w.profile_id=?1 ORDER BY w.added_at DESC").and_then(|mut s|s.query_map([p.profile_id],|r|{let raw:String=r.get(2)?;Ok(json!({"path":r.get::<_,String>(0)?,"added_at":r.get::<_,i64>(1)?,"result":serde_json::from_str::<Value>(&raw).unwrap_or_default()}))})?.collect()).unwrap_or_default();
+    Json(json!({"items":items})).into_response()
+}
+pub async fn watchlist_toggle(State(app): State<App>, headers: HeaderMap, Json(input): Json<WatchlistInput>) -> Response {
+    let Some(p)=principal(&app.db,&headers) else{return StatusCode::UNAUTHORIZED.into_response()};
+    if input.path.is_empty()||input.path.len()>16_384{return StatusCode::BAD_REQUEST.into_response()}
+    if input.enabled {
+        if !crate::is_library_path(&app,&input.path) { return StatusCode::NOT_FOUND.into_response(); }
+        match conn(&app.db).execute("INSERT INTO profile_watchlist(profile_id,path,added_at) VALUES(?1,?2,?3) ON CONFLICT(profile_id,path) DO NOTHING",params![p.profile_id,input.path,chrono::Utc::now().timestamp()]) { Ok(_)=>Json(json!({"ok":true,"saved":true})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+    } else {
+        match conn(&app.db).execute("DELETE FROM profile_watchlist WHERE profile_id=?1 AND path=?2",params![p.profile_id,input.path]) { Ok(_)=>Json(json!({"ok":true,"saved":false})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+    }
+}
+
 pub async fn auth_page(State(app): State<App>) -> Html<String> {
     let setup=!has_accounts(&app.db);
     let title=if setup{"Create your server owner account"}else{"Sign in to your media server"};
     let fields=if setup{"<label>Email<input id=email type=email autocomplete=email required maxlength=254></label><label>Display name<input id=display-name autocomplete=name maxlength=64></label><label>Password (12 characters minimum)<input id=password type=password autocomplete=new-password required minlength=12></label><label>Confirm password<input id=confirm type=password autocomplete=new-password required minlength=12></label>"}else{"<label>Email<input id=email type=email autocomplete=username required maxlength=254></label><label>Password<input id=password type=password autocomplete=current-password required></label>"};
     let recovery=if setup{""}else{"<p class=recovery>Forgot the server owner's password? Run <code>./target/release/smart-media-scanner reset-owner-password</code> in the server shell. For Docker, run that command in an interactive shell inside the app container (use the executable's path if needed). It updates the owner credentials and signs out existing owner sessions.</p>"};
-    Html(format!("<!doctype html><html><meta name=viewport content='width=device-width,initial-scale=1'><title>{title}</title><style>body{{margin:0;background:#0c1017;color:#eef2f7;font:16px system-ui;display:grid;place-items:center;min-height:100vh}}form{{width:min(390px,88vw);background:#171d28;padding:30px;border:1px solid #2c3544;border-radius:16px}}h1{{font-size:24px}}p{{color:#98a5b7;line-height:1.5}}.recovery{{border-top:1px solid #2c3544;margin:22px 0 0;padding-top:16px;font-size:13px}}code{{color:#e6ad55;overflow-wrap:anywhere}}label{{display:block;margin:18px 0;color:#aeb8c6}}input{{display:block;box-sizing:border-box;width:100%;padding:12px;margin-top:6px;color:white;background:#0d131c;border:1px solid #364255;border-radius:8px}}button{{width:100%;padding:12px;background:#e6ad55;border:0;border-radius:8px;font-weight:700;cursor:pointer}}#error{{color:#ff9c9c}}</style><form id=form><h1>{title}</h1><p>{}</p>{fields}<p id=error></p><button>{}</button>{recovery}</form><script>const formEl=document.getElementById('form'),errorEl=document.getElementById('error');formEl.onsubmit=async e=>{{e.preventDefault();errorEl.textContent='';const email=document.getElementById('email').value,password=document.getElementById('password').value,display_name=document.getElementById('display-name')?.value||undefined;if({setup}&&password!==document.getElementById('confirm').value){{errorEl.textContent='Passwords do not match';return}}let r=await fetch('/api/auth/{}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{email,password,display_name}})}});let d=await r.json().catch(()=>({{}}));if(!r.ok){{errorEl.textContent=d.error||'Could not sign in';return}}location.href='/'}}</script></html>",if setup{"The owner controls critical server settings. Use an email you can recover; passwords are stored as a salted, slow hash."}else{"Sign in with the email linked to your account."},if setup{"Create owner account"}else{"Sign in"},if setup{"setup"}else{"login"}))
+    Html(format!("<!doctype html><html><meta name=viewport content='width=device-width,initial-scale=1'><title>{title}</title><style>body{{margin:0;background:#0c1017;color:#eef2f7;font:16px system-ui;display:grid;place-items:center;min-height:100vh}}form{{width:min(390px,88vw);background:#171d28;padding:30px;border:1px solid #2c3544;border-radius:16px}}h1{{font-size:24px}}p{{color:#98a5b7;line-height:1.5}}.recovery{{border-top:1px solid #2c3544;margin:22px 0 0;padding-top:16px;font-size:13px}}code{{color:#e6ad55;overflow-wrap:anywhere}}label{{display:block;margin:18px 0;color:#aeb8c6}}input{{display:block;box-sizing:border-box;width:100%;padding:12px;margin-top:6px;color:white;background:#0d131c;border:1px solid #364255;border-radius:8px}}button{{width:100%;padding:12px;background:#e6ad55;border:0;border-radius:8px;font-weight:700;cursor:pointer}}#error{{color:#ff9c9c}}</style><form id=form><h1>{title}</h1><p>{}</p>{fields}<p id=error></p><button>{}</button>{recovery}</form><script>const formEl=document.getElementById('form'),errorEl=document.getElementById('error');formEl.onsubmit=async e=>{{e.preventDefault();errorEl.textContent='';const email=document.getElementById('email').value,password=document.getElementById('password').value,display_name=document.getElementById('display-name')?.value||undefined;if({setup}&&password!==document.getElementById('confirm').value){{errorEl.textContent='Passwords do not match';return}}let r=await fetch('/api/auth/{}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{email,password,confirm_password:document.getElementById('confirm')?.value,display_name}})}});let d=await r.json().catch(()=>({{}}));if(!r.ok){{errorEl.textContent=d.error||'Could not sign in';return}}location.href='/'}}</script></html>",if setup{"The owner controls critical server settings. Use an email you can recover; passwords are stored as a salted, slow hash."}else{"Sign in with the email linked to your account."},if setup{"Create owner account"}else{"Sign in"},if setup{"setup"}else{"login"}))
 }
 
 #[cfg(test)]

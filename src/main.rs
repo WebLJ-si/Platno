@@ -74,6 +74,8 @@ impl Job {
 struct ScanRequest {
     roots: Vec<String>,
     library_id: Option<i64>,
+    #[serde(default)]
+    full_scan: bool,
 }
 #[derive(Deserialize)]
 struct LibraryInput { id: Option<i64>, name: String, kind: String, roots: Option<Vec<String>> }
@@ -740,7 +742,7 @@ fn assign_scanned_file(c:&Connection,path:&str,result:&Value,library_id:Option<i
     let target=if auto_sort && matches!(result_kind,"movie"|"tv") {c.query_row("SELECT id FROM libraries WHERE kind=?1 ORDER BY id LIMIT 1",[result_kind],|r|r.get::<_,i64>(0)).ok()} else {library_id.or_else(||c.query_row("SELECT id FROM libraries WHERE kind=?1 ORDER BY id LIMIT 1",[result_kind],|r|r.get::<_,i64>(0)).ok())};
     if let Some(id)=target {let _=c.execute("INSERT INTO library_files(path,library_id) VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET library_id=excluded.library_id",params![path,id]);}
 }
-async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bool) {
+async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bool, full_scan:bool) {
     let mut paths = vec![];
     let mut seen = HashSet::new();
     for root in roots {
@@ -873,7 +875,7 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
                         .starts_with("TMDB_TOKEN is not configured")
             });
             *locked == 1
-                || (*size == md.len() as i64
+                || (!full_scan && *size == md.len() as i64
                     && *mt == mtime
                     && !old_matcher
                     && !stale_range
@@ -1008,11 +1010,12 @@ async fn start(State(app): State<App>, Json(req): Json<ScanRequest>) -> impl Int
         action: "Preparing scan".into(),
         ..Job::default()
     };
-    s.log("Scan started");
+    s.log(if req.full_scan { "Full scan started; rechecking unlocked files" } else { "Incremental scan started; unchanged files will be skipped" });
     app.cancel.store(false, Ordering::Relaxed);
     drop(s);
+    let full_scan=req.full_scan;
     tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(scan(app, req.roots, req.library_id, auto_sort));
+        tokio::runtime::Handle::current().block_on(scan(app, req.roots, req.library_id, auto_sort, full_scan));
     });
     (StatusCode::OK, Json(json!({"ok":true})))
 }
@@ -1259,46 +1262,51 @@ async fn index(State(app): State<App>, headers: HeaderMap) -> Html<String> {
         .unwrap_or_else(|_| include_str!("../static/index.html").to_string());
     Html(html)
 }
+fn ensure_availability_check(app: &App, rows: &Value) {
+    let paths: Vec<String> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["available"].is_null())
+        .filter_map(|row| row["path"].as_str().map(str::to_owned))
+        .collect();
+    if paths.is_empty()
+        || app
+            .availability_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return;
+    }
+    let task_app = app.clone();
+    let generation = app.availability_generation.load(Ordering::Acquire);
+    tokio::task::spawn_blocking(move || {
+        for path in paths {
+            if task_app.availability_generation.load(Ordering::Acquire) != generation {
+                break;
+            }
+            let available = std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file());
+            if task_app.availability_generation.load(Ordering::Acquire) != generation {
+                break;
+            }
+            task_app
+                .availability
+                .write()
+                .unwrap()
+                .insert(path, available);
+        }
+        task_app
+            .availability_running
+            .store(false, Ordering::Release);
+    });
+}
+
 async fn files(State(app): State<App>) -> Json<Value> {
     let snapshot_app = app.clone();
     let Json(rows) = tokio::task::spawn_blocking(move || files_blocking(&snapshot_app))
         .await
         .unwrap_or_else(|_| Json(json!([])));
-    let paths: Vec<String> = rows
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|r| r["available"].is_null())
-        .filter_map(|r| r["path"].as_str().map(str::to_owned))
-        .collect();
-    if !paths.is_empty()
-        && app
-            .availability_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    {
-        let task_app = app.clone();
-        let generation = app.availability_generation.load(Ordering::Acquire);
-        tokio::task::spawn_blocking(move || {
-            for path in paths {
-                if task_app.availability_generation.load(Ordering::Acquire) != generation {
-                    break;
-                }
-                let available = std::fs::metadata(&path).is_ok_and(|m| m.is_file());
-                if task_app.availability_generation.load(Ordering::Acquire) != generation {
-                    break;
-                }
-                task_app
-                    .availability
-                    .write()
-                    .unwrap()
-                    .insert(path, available);
-            }
-            task_app
-                .availability_running
-                .store(false, Ordering::Release);
-        });
-    }
+    ensure_availability_check(&app, &rows);
     Json(rows)
 }
 // A database snapshot must never synchronously touch a slow or offline drive.
@@ -1325,9 +1333,28 @@ fn library_list(c:&Connection)->Vec<Value>{
     c.prepare("SELECT l.id,l.name,l.kind,l.roots,(SELECT COUNT(*) FROM library_files f WHERE f.library_id=l.id) FROM libraries l ORDER BY l.created_at,l.id").and_then(|mut s|s.query_map([],|r|{let raw:String=r.get(3)?;Ok(json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"kind":r.get::<_,String>(2)?,"roots":serde_json::from_str::<Value>(&raw).unwrap_or(json!([])),"file_count":r.get::<_,i64>(4)?}))})?.collect()).unwrap_or_default()
 }
 async fn get_libraries(State(app):State<App>)->Json<Value>{let c=db(&app);let auto_sort=c.query_row("SELECT value FROM settings WHERE key='library_auto_sort'",[],|r|r.get::<_,String>(0)).map(|v|v=="true").unwrap_or(true);Json(json!({"libraries":library_list(&c),"auto_sort":auto_sort}))}
-async fn get_library_files(State(app):State<App>,AxPath(id):AxPath<i64>)->Response{
-    let c=db(&app);let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM libraries WHERE id=?1)",[id],|r|r.get(0)).unwrap_or(false);if !exists{return StatusCode::NOT_FOUND.into_response()}
-    let Json(rows)=files_blocking(&app);let visible:Vec<Value>=rows.as_array().cloned().unwrap_or_default().into_iter().filter(|row|row["library_ids"].as_array().is_some_and(|ids|ids.iter().any(|x|x.as_i64()==Some(id)))).collect();Json(json!({"files":visible})).into_response()
+async fn get_library_files(State(app): State<App>, AxPath(id): AxPath<i64>) -> Response {
+    let c = db(&app);
+    let exists: bool = c
+        .query_row("SELECT EXISTS(SELECT 1 FROM libraries WHERE id=?1)", [id], |r| r.get(0))
+        .unwrap_or(false);
+    if !exists {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Json(rows) = files_blocking(&app);
+    ensure_availability_check(&app, &rows);
+    let visible: Vec<Value> = rows
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| {
+            row["library_ids"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|x| x.as_i64() == Some(id)))
+        })
+        .collect();
+    Json(json!({"files":visible})).into_response()
 }
 async fn save_library(State(app):State<App>,Json(input):Json<LibraryInput>)->Response{
     let name=input.name.trim();if name.is_empty()||name.chars().count()>48||name.chars().any(char::is_control)||!matches!(input.kind.as_str(),"movie"|"tv"|"video"|"other"){return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a 1–48 character name and a supported library type"}))).into_response()}
@@ -1754,27 +1781,28 @@ async fn subtitle_search(
     }
 }
 async fn catalogue(State(app): State<App>, AxPath(id): AxPath<i64>) -> impl IntoResponse {
-    match cached(
-        &app,
-        &format!("tvmaze:episodes:{id}"),
-        &format!("https://api.tvmaze.com/shows/{id}/episodes?specials=1"),
-        None,
-    )
-    .await
-    {
-        Ok(v) => {
+    let episodes_url = format!("https://api.tvmaze.com/shows/{id}/episodes?specials=1");
+    let seasons_url = format!("https://api.tvmaze.com/shows/{id}/seasons");
+    let episodes_key = format!("tvmaze:episodes:{id}");
+    let seasons_key = format!("tvmaze:seasons:{id}");
+    let (episodes_result, seasons_result) = tokio::join!(
+        cached(&app, &episodes_key, &episodes_url, None),
+        cached(&app, &seasons_key, &seasons_url, None),
+    );
+    match episodes_result {
+        Ok(episodes) => {
             let saved: i64 = db(&app)
-                .query_row(
-                    "SELECT saved FROM cache WHERE key=?1",
-                    [format!("tvmaze:episodes:{id}")],
-                    |r| r.get(0),
-                )
+                .query_row("SELECT saved FROM cache WHERE key=?1", [&episodes_key], |r| r.get(0))
                 .unwrap_or(0);
+            let seasons = seasons_result.unwrap_or_else(|_| json!([]));
             (
                 StatusCode::OK,
-                Json(
-                    json!({"episodes":v,"today":Local::now().format("%Y-%m-%d").to_string(),"verified":Utc::now().timestamp()-saved<86400*7}),
-                ),
+                Json(json!({
+                    "episodes": episodes,
+                    "seasons": seasons,
+                    "today": Local::now().format("%Y-%m-%d").to_string(),
+                    "verified": Utc::now().timestamp() - saved < 86400 * 7
+                })),
             )
         }
         Err(e) => (
@@ -1782,6 +1810,21 @@ async fn catalogue(State(app): State<App>, AxPath(id): AxPath<i64>) -> impl Into
             Json(json!({"error":e,"verified":false})),
         ),
     }
+}
+
+#[derive(Deserialize)]
+struct MetadataDetailQuery { kind: String, id: i64 }
+async fn metadata_detail(State(app): State<App>, axum::extract::Query(q): axum::extract::Query<MetadataDetailQuery>) -> impl IntoResponse {
+    if q.id<=0||!matches!(q.kind.as_str(),"movie"|"tv") { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Invalid metadata request."}))); }
+    if q.kind=="movie" {
+        let token=tmdb_token(&app);
+        if token.is_empty() { return (StatusCode::OK,Json(json!({"rating":null,"runtime":null,"poster":null,"description":null}))); }
+        let detail=match cached(&app,&format!("tmdb:movie-detail:{}",q.id),&format!("https://api.themoviedb.org/3/movie/{}",q.id),Some(&token)).await {Ok(v)=>v,Err(_)=>return (StatusCode::BAD_GATEWAY,Json(json!({"error":"Could not load movie information."})))};
+        let poster=poster_url(&app,&detail["poster_path"],&token).await;
+        return (StatusCode::OK,Json(json!({"title":detail["title"],"year":detail["release_date"],"description":detail["overview"],"rating":detail["vote_average"],"rating_count":detail["vote_count"],"runtime":detail["runtime"],"poster":poster})));
+    }
+    let detail=match cached(&app,&format!("tvmaze:show:{}",q.id),&format!("https://api.tvmaze.com/shows/{}",q.id),None).await {Ok(v)=>v,Err(_)=>return (StatusCode::BAD_GATEWAY,Json(json!({"error":"Could not load series information."})))};
+    (StatusCode::OK,Json(json!({"title":detail["name"],"year":detail["premiered"],"description":detail["summary"],"rating":detail["rating"]["average"],"rating_count":null,"runtime":detail["averageRuntime"].as_i64().or_else(||detail["runtime"].as_i64()),"poster":detail["image"]["original"].as_str().or_else(||detail["image"]["medium"].as_str())})))
 }
 fn app_data_directory() -> PathBuf {
     std::env::var_os("SMART_MEDIA_DATA")
@@ -1878,6 +1921,8 @@ async fn main() {
         .route("/api/owner/providers/tmdb", post(save_tmdb_key))
         .route("/api/owner/providers/opensubtitles", post(save_subtitle_key))
         .route("/api/user/settings", get(auth::user_settings).post(auth::save_user_setting))
+        .route("/api/watchlist", get(auth::watchlist_get))
+        .route("/api/watchlist/toggle", post(auth::watchlist_toggle))
         .route("/api/playback/activity", post(auth::record_activity))
         .route("/assets/hls-1.7.3.js", get(hls_javascript))
         .route("/api/files", get(files))
@@ -1892,6 +1937,7 @@ async fn main() {
         .route("/api/status", get(status))
         .route("/api/override", post(update))
         .route("/api/metadata/search", get(metadata_search))
+        .route("/api/metadata/detail", get(metadata_detail))
         .route("/api/metadata/match", post(manual_match))
         .route("/api/subtitles/status", get(subtitle_status))
         .route("/api/subtitles/key", post(save_subtitle_key))
@@ -1958,6 +2004,100 @@ mod integration_tests {
                 .unwrap();
         }
         (temp, app)
+    }
+    #[test]
+    fn transcode_quality_balance_changes_bitrate_for_both_stream_modes() {
+        let (_temp, app) = fixture();
+        auth::init(&app.db);
+        assert_eq!(playback::video_bitrate(&app, "720"), Some((1280, 720, "3000k".into())));
+        db(&app).execute("INSERT INTO server_settings(key,value) VALUES('transcode_quality','speed')", []).unwrap();
+        assert_eq!(playback::video_bitrate(&app, "720"), Some((1280, 720, "2100k".into())));
+        db(&app).execute("UPDATE server_settings SET value='quality' WHERE key='transcode_quality'", []).unwrap();
+        assert_eq!(playback::video_bitrate(&app, "720"), Some((1280, 720, "4500k".into())));
+        assert!(playback::video_bitrate(&app, "4k").is_none());
+    }
+    #[tokio::test]
+    async fn account_passwords_require_confirmation_and_owner_reauthentication() {
+        let (_temp, app) = fixture();
+        auth::init(&app.db);
+        let setup = |password: &str, confirm: &str| auth::Credentials {
+            email: "owner@example.com".into(), password: password.into(),
+            confirm_password: Some(confirm.into()), display_name: Some("Owner".into()),
+        };
+        let mismatch = auth::setup(State(app.clone()), Json(setup("owner password 123", "different pass 456"))).await;
+        assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
+        let created = auth::setup(State(app.clone()), Json(setup("original owner password", "original owner password"))).await;
+        assert_eq!(created.status(), StatusCode::OK);
+        let c=db(&app);
+        let (id,profile):(i64,i64)=c.query_row("SELECT a.id,p.id FROM accounts a JOIN profiles p ON p.account_id=a.id WHERE a.role='owner'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        let actor=auth::Principal{account_id:id,username:"Owner".into(),email:"owner@example.com".into(),role:"owner".into(),profile_id:profile,profile_name:"Default".into()};
+        let update=|password:&str,confirm:&str,current:Option<&str>|auth::OwnerCredentialsInput{account_id:id,email:"owner@example.com".into(),password:password.into(),confirm_password:confirm.into(),current_owner_password:current.map(str::to_string)};
+        let mismatch=auth::update_account_credentials(State(app.clone()),axum::Extension(actor.clone()),Json(update("replacement owner password","different replacement",Some("original owner password")))).await;
+        assert_eq!(mismatch.status(),StatusCode::BAD_REQUEST);
+        let no_reauth=auth::update_account_credentials(State(app.clone()),axum::Extension(actor.clone()),Json(update("replacement owner password","replacement owner password",None))).await;
+        assert_eq!(no_reauth.status(),StatusCode::FORBIDDEN);
+        let wrong_reauth=auth::update_account_credentials(State(app.clone()),axum::Extension(actor.clone()),Json(update("replacement owner password","replacement owner password",Some("wrong current password")))).await;
+        assert_eq!(wrong_reauth.status(),StatusCode::FORBIDDEN);
+        let changed=auth::update_account_credentials(State(app.clone()),axum::Extension(actor.clone()),Json(update("replacement owner password","replacement owner password",Some("original owner password")))).await;
+        assert_eq!(changed.status(),StatusCode::OK);
+        let login=auth::login(State(app.clone()),Json(auth::Credentials{email:"owner@example.com".into(),password:"replacement owner password".into(),confirm_password:None,display_name:None})).await;
+        assert_eq!(login.status(),StatusCode::OK);
+        let create=|password:&str,confirm:&str|auth::AccountInput{email:"viewer@example.com".into(),password:password.into(),confirm_password:confirm.into(),display_name:Some("Viewer".into()),role:Some("user".into())};
+        let mismatch=auth::create_account(State(app.clone()),axum::Extension(actor.clone()),Json(create("viewer password 123","not the same"))).await;
+        assert_eq!(mismatch.status(),StatusCode::BAD_REQUEST);
+        let created=auth::create_account(State(app.clone()),axum::Extension(actor),Json(create("viewer password 123","viewer password 123"))).await;
+        assert_eq!(created.status(),StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn profile_creation_and_switching_require_a_verified_pin() {
+        let (_temp, app) = fixture();
+        auth::init(&app.db);
+        let setup=auth::setup(State(app.clone()),Json(auth::Credentials{email:"owner@example.com".into(),password:"owner password 123".into(),confirm_password:Some("owner password 123".into()),display_name:Some("Owner".into())})).await;
+        assert_eq!(setup.status(),StatusCode::OK);
+        let cookie=setup.headers().get(axum::http::header::SET_COOKIE).unwrap().to_str().unwrap().split(';').next().unwrap();
+        let mut headers=HeaderMap::new(); headers.insert(axum::http::header::COOKIE,axum::http::HeaderValue::from_str(cookie).unwrap());
+        let mismatch=auth::profiles(State(app.clone()),headers.clone(),Json(auth::ProfileInput{name:"Kids".into(),pin:"1234".into(),confirm_pin:"4321".into()})).await;
+        assert_eq!(mismatch.status(),StatusCode::BAD_REQUEST);
+        let created=auth::profiles(State(app.clone()),headers.clone(),Json(auth::ProfileInput{name:"Kids".into(),pin:"1234".into(),confirm_pin:"1234".into()})).await;
+        assert_eq!(created.status(),StatusCode::OK);
+        let id:i64=db(&app).query_row("SELECT id FROM profiles WHERE name='Kids'",[],|r|r.get(0)).unwrap();
+        let wrong=auth::switch_profile(State(app.clone()),headers.clone(),Json(auth::ProfileSwitchInput{profile_id:id,pin:"9999".into(),confirm_pin:None})).await;
+        assert_eq!(wrong.status(),StatusCode::FORBIDDEN);
+        assert_eq!(auth::principal(&app.db,&headers).unwrap().profile_name,"Default");
+        let switched=auth::switch_profile(State(app.clone()),headers.clone(),Json(auth::ProfileSwitchInput{profile_id:id,pin:"1234".into(),confirm_pin:None})).await;
+        assert_eq!(switched.status(),StatusCode::OK);
+        assert_eq!(auth::principal(&app.db,&headers).unwrap().profile_name,"Kids");
+        let legacy_id:i64={let c=db(&app); c.execute("INSERT INTO profiles(account_id,name,created_at) VALUES(1,'Legacy',?1)",[Utc::now().timestamp()]).unwrap(); c.last_insert_rowid()};
+        let no_confirmation=auth::switch_profile(State(app.clone()),headers.clone(),Json(auth::ProfileSwitchInput{profile_id:legacy_id,pin:"2345".into(),confirm_pin:None})).await;
+        assert_eq!(no_confirmation.status(),StatusCode::BAD_REQUEST);
+        let first_setup=auth::switch_profile(State(app.clone()),headers,Json(auth::ProfileSwitchInput{profile_id:legacy_id,pin:"2345".into(),confirm_pin:Some("2345".into())})).await;
+        assert_eq!(first_setup.status(),StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn watchlist_is_persisted_separately_for_each_profile() {
+        let (_temp, app) = fixture();
+        auth::init(&app.db);
+        let setup=auth::setup(State(app.clone()),Json(auth::Credentials{email:"owner@example.com".into(),password:"owner password 123".into(),confirm_password:Some("owner password 123".into()),display_name:Some("Owner".into())})).await;
+        let cookie=setup.headers().get(axum::http::header::SET_COOKIE).unwrap().to_str().unwrap().split(';').next().unwrap();
+        let mut headers=HeaderMap::new(); headers.insert(axum::http::header::COOKIE,axum::http::HeaderValue::from_str(cookie).unwrap());
+        let path="/Media/Example Movie.mkv";
+        db(&app).execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES(?1,'/Media',100,0,'{}',?2,'now')",params![path,json!({"kind":"movie","title":"Example Movie","provider":"tmdb","provider_id":22}).to_string()]).unwrap();
+        let add=auth::watchlist_toggle(State(app.clone()),headers.clone(),Json(auth::WatchlistInput{path:path.into(),enabled:true})).await;
+        assert_eq!(add.status(),StatusCode::OK);
+        assert_eq!(db(&app).query_row("SELECT COUNT(*) FROM profile_watchlist WHERE profile_id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        let created=auth::profiles(State(app.clone()),headers.clone(),Json(auth::ProfileInput{name:"Guest".into(),pin:"2468".into(),confirm_pin:"2468".into()})).await;
+        assert_eq!(created.status(),StatusCode::OK);
+        let guest:i64=db(&app).query_row("SELECT id FROM profiles WHERE name='Guest'",[],|r|r.get(0)).unwrap();
+        let switched=auth::switch_profile(State(app.clone()),headers.clone(),Json(auth::ProfileSwitchInput{profile_id:guest,pin:"2468".into(),confirm_pin:None})).await;
+        assert_eq!(switched.status(),StatusCode::OK);
+        let other=auth::watchlist_get(State(app.clone()),headers.clone()).await;
+        assert_eq!(other.status(),StatusCode::OK);
+        assert_eq!(db(&app).query_row("SELECT COUNT(*) FROM profile_watchlist WHERE profile_id=?1",[guest],|r|r.get::<_,i64>(0)).unwrap(),0);
+        let removed=auth::watchlist_toggle(State(app.clone()),headers,Json(auth::WatchlistInput{path:path.into(),enabled:false})).await;
+        assert_eq!(removed.status(),StatusCode::OK);
+        assert_eq!(db(&app).query_row("SELECT COUNT(*) FROM profile_watchlist WHERE profile_id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     #[tokio::test]
@@ -2173,7 +2313,7 @@ mod integration_tests {
             std::fs::write(dir.join(name), b"not video data").unwrap();
         }
         std::fs::write(dir.join("The Power.en.srt"), b"subtitle").unwrap();
-        scan(app.clone(), vec![dir.to_string_lossy().to_string()], None, true).await;
+        scan(app.clone(), vec![dir.to_string_lossy().to_string()], None, true, false).await;
         let c = db(&app);
         let get = |name: &str| -> Value {
             let s: String = c
@@ -2200,8 +2340,16 @@ mod integration_tests {
         .await
         .into_response();
         assert_eq!(response.status(), StatusCode::OK);
+        let repeated_path = dir.join("Repeated.mkv").to_string_lossy().to_string();
+        c.execute(
+            "UPDATE files SET result=?2 WHERE path=?1",
+            params![repeated_path, json!({"kind":"tv","title":"stale title","matcher_version":6}).to_string()],
+        ).unwrap();
+        scan(app.clone(), vec![dir.to_string_lossy().to_string()], None, true, true).await;
+        assert_ne!(get("Repeated.mkv")["title"], "stale title");
+        assert_eq!(get("The Power.mkv")["kind"], "extra");
         std::fs::write(dir.join("The Power.mkv"), b"changed").unwrap();
-        scan(app.clone(), vec![dir.to_string_lossy().to_string()], None, true).await;
+        scan(app.clone(), vec![dir.to_string_lossy().to_string()], None, true, false).await;
         assert_eq!(get("The Power.mkv")["kind"], "extra");
         scan(
             app.clone(),
@@ -2212,6 +2360,7 @@ mod integration_tests {
                 .to_string()],
             None,
             true,
+            false,
         )
         .await;
         assert_eq!(get("The Power.mkv")["kind"], "extra");
@@ -2448,6 +2597,22 @@ mod integration_tests {
         let Json(after) = files_blocking(&app);
         assert_eq!(after[0]["available"], true);
     }
+    #[tokio::test]
+    async fn availability_check_confirms_connected_files_after_startup() {
+        let (temp, app) = fixture();
+        let media = temp.path().join("episode.mkv");
+        std::fs::write(&media, b"media").unwrap();
+        let rows = json!([{"path":media,"available":null}]);
+        ensure_availability_check(&app, &rows);
+        for _ in 0..100 {
+            if app.availability.read().unwrap().contains_key(media.to_str().unwrap()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(app.availability.read().unwrap().get(media.to_str().unwrap()), Some(&true));
+    }
+
     #[test]
     fn page_bootstraps_saved_library_and_escapes_script_markup() {
         let (_temp, app) = fixture();
@@ -2465,5 +2630,15 @@ mod integration_tests {
         assert_eq!(data["files"][0]["path"], "/Media/</script>.mkv");
         assert_eq!(data["files"][0]["result"]["title"], "Saved <Film>");
         assert!(!content[json_start..json_end].contains('<'));
+        assert!(html.contains("function renderNav()"));
+        assert!(html.contains("function renderWatchlist()"));
+        assert!(html.contains("id=\"detail-season\""));
+        assert!(html.contains("id=\"detail-rating\""));
+        assert!(!html.contains("% confidence"));
+        assert!(html.contains("episode-legend"));
+        assert!(html.contains("season-summary"));
+        assert!(html.contains("episode-counts"));
+        assert!(html.contains("setEpisodeFilter"));
+        assert!(html.contains("availabilityRefreshDelay"));
     }
 }

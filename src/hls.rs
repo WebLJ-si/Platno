@@ -67,11 +67,8 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
     if !start.is_finite() || !(0.0..=1_000_000.0).contains(&start) {
         return error(StatusCode::BAD_REQUEST, "Invalid playback position");
     }
-    let (width, height, rate) = match input.quality.as_deref().unwrap_or("1080") {
-        "480" => (854, 480, "1200k"),
-        "720" => (1280, 720, "3000k"),
-        "1080" => (1920, 1080, "6000k"),
-        _ => return error(StatusCode::BAD_REQUEST, "Invalid quality"),
+    let Some((width, height, rate)) = playback::video_bitrate(&app, input.quality.as_deref().unwrap_or("1080")) else {
+        return error(StatusCode::BAD_REQUEST, "Invalid quality");
     };
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -114,9 +111,9 @@ pub async fn start(State(app): State<App>, Json(input): Json<Start>) -> Response
             "-vf",
             &scale,
             "-b:v",
-            rate,
+            &rate,
             "-maxrate",
-            rate,
+            &rate,
             "-bufsize",
             "12000k",
             "-force_key_frames",
