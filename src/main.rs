@@ -1919,6 +1919,11 @@ async fn main() {
     let auth_db = app.db.clone();
     let routes = Router::new()
         .route("/", get(index))
+        .route("/manifest.webmanifest", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/manifest+json")],include_str!("../static/manifest.webmanifest")) }))
+        .route("/sw.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/sw.js")) }))
+        .route("/offline.html", get(||async {Html(include_str!("../static/offline.html"))}))
+        .route("/assets/icon-192.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-192.png").as_slice()) }))
+        .route("/assets/icon-512.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-512.png").as_slice()) }))
         .route("/api/auth/setup-status", get(auth::setup_status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))

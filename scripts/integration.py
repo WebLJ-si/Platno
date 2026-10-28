@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated HTTP/FFmpeg regression suite. Never touches the real library."""
-import http.cookiejar, json, math, os, pathlib, re, socket, sqlite3, struct, subprocess, tempfile, time, urllib.request, urllib.error
+import http.cookiejar, json, math, os, sys, pathlib, re, socket, sqlite3, struct, subprocess, tempfile, time, urllib.request, urllib.error
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 def run(*args): return subprocess.run(args, check=True, capture_output=True)
 with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
@@ -32,10 +32,13 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
             except (OSError,urllib.error.URLError): time.sleep(.1)
         else: raise AssertionError('isolated server failed to start')
         api('/api/playback/info?path=nope',status=401,opener=urllib.request.build_opener())
+        assert api('/manifest.webmanifest',opener=urllib.request.build_opener())['display']=='standalone'
+        assert request('/assets/icon-192.png',opener=urllib.request.build_opener())[0].startswith(b'\x89PNG')
+        assert b'Never cache authenticated' in request('/sw.js',opener=urllib.request.build_opener())[0]
         api('/api/auth/setup',{'email':'owner@example.test','password':'integration password 123','confirm_password':'integration password 123'})
         db=sqlite3.connect(data/'library.sqlite3')
         for n,path in enumerate([video,direct,hdr]):
-            result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','subtitles':[]}
+            result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','confidence':100,'requires_review':False,'subtitles':[]}
             db.execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES(?,?,?,?,?,?,?)",(str(path),str(base),path.stat().st_size,0,'{}',json.dumps(result),'2026-10-29'))
             db.execute('INSERT INTO library_files(path,library_id) VALUES(?,(SELECT id FROM libraries WHERE kind=\'movie\' LIMIT 1))',(str(path),))
         db.commit()
@@ -99,6 +102,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         api('/api/auth/profile',{'profile_id':other['id'],'pin':'1234'})
         assert api('/api/playback/watched')['items']==[]
         assert api('/api/user/settings')=={}
+        if '--browser' in sys.argv: subprocess.run(['node',str(ROOT/'scripts/browser.cjs'),url],check=True,timeout=150)
         print('PASS: isolated HTTP, audio tracks + decoded language, chapters, direct ranges, three HLS variants, validation, atomic watched/reset, profile isolation')
     finally:
         proc.terminate()

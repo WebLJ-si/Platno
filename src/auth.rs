@@ -156,14 +156,14 @@ pub(crate) fn principal(path: &PathBuf, headers: &HeaderMap) -> Option<Principal
 
 pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Next) -> Response {
     let uri = req.uri().path();
-    let public = uri == "/" || uri.starts_with("/assets/") || matches!(uri, "/api/auth/setup-status" | "/api/auth/setup" | "/api/auth/login");
+    let public = matches!(uri,"/"|"/manifest.webmanifest"|"/sw.js"|"/offline.html") || uri.starts_with("/assets/") || matches!(uri, "/api/auth/setup-status" | "/api/auth/setup" | "/api/auth/login");
     if let Some(p) = principal(&path, req.headers()) {
         let role_ok = if uri.starts_with("/api/owner/") || uri == "/api/subtitles/key" { p.role == "owner" }
             else if uri.starts_with("/api/admin/") { p.role == "owner" || p.role == "admin" }
             else { true };
         if !role_ok { return (StatusCode::FORBIDDEN, Json(json!({"error":"Your role cannot access this feature"}))).into_response(); }
         if p.role == "user" {
-            let allowed = uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
+            let allowed = public || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
             if !allowed { return (StatusCode::FORBIDDEN, Json(json!({"error":"User profiles can only browse and watch the library"}))).into_response(); }
         }
         req.extensions_mut().insert(p);
