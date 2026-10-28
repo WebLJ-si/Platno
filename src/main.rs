@@ -1923,6 +1923,7 @@ async fn main() {
         .route("/api/user/settings", get(auth::user_settings).post(auth::save_user_setting))
         .route("/api/watchlist", get(auth::watchlist_get))
         .route("/api/watchlist/toggle", post(auth::watchlist_toggle))
+        .route("/api/playback/watched", get(auth::watched_get).post(auth::watched_post))
         .route("/api/playback/activity", post(auth::record_activity))
         .route("/assets/hls-1.7.3.js", get(hls_javascript))
         .route("/api/files", get(files))

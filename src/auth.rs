@@ -444,3 +444,34 @@ mod tests {
         assert!(normalize_email("not-an-email").is_none());
     }
 }
+
+#[derive(Deserialize)]
+pub struct WatchedInput {
+    paths: Vec<String>,
+    action: String,
+}
+pub async fn watched_get(State(app): State<App>, headers: HeaderMap) -> Response {
+    let Some(p) = principal(&app.db, &headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
+    let c = conn(&app.db);
+    let rows: Vec<Value> = c.prepare("SELECT path,completed,position FROM profile_watch_progress WHERE profile_id=?1")
+        .and_then(|mut s|s.query_map([p.profile_id],|r|Ok(json!({"path":r.get::<_,String>(0)?,"completed":r.get::<_,bool>(1)?,"position":r.get::<_,f64>(2)?})))?.collect()).unwrap_or_default();
+    Json(json!({"items":rows})).into_response()
+}
+pub async fn watched_post(State(app): State<App>, headers: HeaderMap, Json(input): Json<WatchedInput>) -> Response {
+    let Some(p) = principal(&app.db, &headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
+    if input.paths.is_empty() || input.paths.len()>10_000 || !matches!(input.action.as_str(),"watched"|"reset") {
+        return (StatusCode::BAD_REQUEST,Json(json!({"error":"Choose watched or reset and 1–10000 library files"}))).into_response();
+    }
+    // Validate the entire batch before changing anything; never accept arbitrary paths.
+    if input.paths.iter().any(|path|!crate::is_library_path(&app,path)) { return StatusCode::NOT_FOUND.into_response(); }
+    let mut c = conn(&app.db);
+    let result = (|| -> rusqlite::Result<()> {
+        let tx=c.transaction()?;
+        for path in &input.paths {
+            if input.action=="reset" { tx.execute("DELETE FROM profile_watch_progress WHERE profile_id=?1 AND path=?2",params![p.profile_id,path])?; }
+            else { tx.execute("INSERT INTO profile_watch_progress(profile_id,path,position,duration,updated_at,completed) VALUES(?1,?2,0,0,?3,1) ON CONFLICT(profile_id,path) DO UPDATE SET completed=1,position=duration,updated_at=excluded.updated_at",params![p.profile_id,path,chrono::Utc::now().timestamp()])?; }
+        }
+        tx.commit()
+    })();
+    match result { Ok(())=>Json(json!({"ok":true,"count":input.paths.len()})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+}
