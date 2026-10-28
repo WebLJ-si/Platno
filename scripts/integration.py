@@ -102,11 +102,32 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         api('/api/user/settings',{'key':'playback_volume','value':'0.35'})
         api('/api/user/settings',{'key':'audio_language','value':'sl'})
         assert api('/api/user/settings')['audio_language']=='sl'
+        owned_session=api('/api/playback/hls/start',{'path':str(video),'quality':'480'})
+        slots=[api('/api/playback/hls/start',{'path':str(video),'quality':'480'}) for _ in range(3)]
+        api('/api/playback/hls/start',{'path':str(video),'quality':'480'},status=429)
+        for session in slots: api('/api/playback/hls/stop',{'id':session['id']})
+        second=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        api('/api/auth/login',{'email':'owner@example.test','password':'integration password 123'},opener=second)
+        assert len(api('/api/auth/sessions')['items'])==2
+        api('/api/auth/sessions',{'others':True})
+        assert len(api('/api/auth/sessions')['items'])==1
+        api('/api/auth/me',status=401,opener=second)
         api('/api/profiles',{'name':'Other','pin':'1234','confirm_pin':'1234'})
         other=next(x for x in api('/api/auth/me')['profiles'] if x['name']=='Other')
         api('/api/auth/profile',{'profile_id':other['id'],'pin':'1234'})
+        request(owned_session['url'],status=404)
+        api('/api/playback/hls/stop',{'id':owned_session['id']},status=404)
         assert api('/api/playback/watched')['items']==[]
         assert api('/api/user/settings')=={}
+        api('/api/auth/profile',{'profile_id':1,'pin':'4321','confirm_pin':'4321'})
+        api('/api/playback/hls/stop',{'id':owned_session['id']})
+        api('/api/admin/accounts',{'email':'viewer@example.test','password':'viewer password 123','confirm_password':'viewer password 123','role':'user'})
+        viewer=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        api('/api/auth/login',{'email':'viewer@example.test','password':'viewer password 123'},opener=viewer)
+        api('/api/admin/health',status=403,opener=viewer)
+        api('/api/admin/playback/markers',{'path':str(video),'markers':[]},status=403,opener=viewer)
+        request('/assets/hls-1.7.3.js',opener=viewer)
+        api('/api/auth/sessions',opener=viewer)
         if '--browser' in sys.argv: subprocess.run(['node',str(ROOT/'scripts/browser.cjs'),url],check=True,timeout=150)
         print('PASS: isolated HTTP, audio tracks + decoded language, chapters, direct ranges, three HLS variants, validation, atomic watched/reset, profile isolation')
     finally:

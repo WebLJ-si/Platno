@@ -1930,6 +1930,7 @@ async fn main() {
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/sessions", get(auth::sessions_get).post(auth::sessions_post))
         .route("/api/auth/me", get(auth::me))
         .route("/api/auth/profile", post(auth::switch_profile))
         .route("/api/profiles", post(auth::profiles))

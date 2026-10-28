@@ -163,7 +163,7 @@ pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Ne
             else { true };
         if !role_ok { return (StatusCode::FORBIDDEN, Json(json!({"error":"Your role cannot access this feature"}))).into_response(); }
         if p.role == "user" {
-            let allowed = public || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
+            let allowed = public || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
             if !allowed { return (StatusCode::FORBIDDEN, Json(json!({"error":"User profiles can only browse and watch the library"}))).into_response(); }
         }
         req.extensions_mut().insert(p);
@@ -477,4 +477,25 @@ pub async fn watched_post(State(app): State<App>, headers: HeaderMap, Json(input
         tx.commit()
     })();
     match result { Ok(())=>Json(json!({"ok":true,"count":input.paths.len()})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+}
+
+#[derive(Deserialize)]
+pub struct RevokeSession { others: Option<bool>, id: Option<String> }
+pub async fn sessions_get(State(app): State<App>, headers: HeaderMap) -> Response {
+    let Some(p)=principal(&app.db,&headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
+    let current=request_token(&headers).map(|t|token_hash(&t)).unwrap_or_default();
+    let items:Vec<Value>=conn(&app.db).prepare("SELECT token_hash,created_at,expires_at FROM auth_sessions WHERE account_id=?1 AND expires_at>?2 ORDER BY created_at DESC").and_then(|mut s|s.query_map(params![p.account_id,chrono::Utc::now().timestamp()],|r|{let id:String=r.get(0)?;Ok(json!({"current":id==current,"id":id,"created_at":r.get::<_,i64>(1)?,"expires_at":r.get::<_,i64>(2)?}))})?.collect()).unwrap_or_default();
+    Json(json!({"items":items})).into_response()
+}
+pub async fn sessions_post(State(app): State<App>, headers: HeaderMap, Json(input): Json<RevokeSession>) -> Response {
+    let Some(p)=principal(&app.db,&headers) else { return StatusCode::UNAUTHORIZED.into_response(); };
+    let current=request_token(&headers).map(|t|token_hash(&t)).unwrap_or_default();
+    let c=conn(&app.db);
+    let result=if input.others==Some(true)&&input.id.is_none() {
+        c.execute("DELETE FROM auth_sessions WHERE account_id=?1 AND token_hash<>?2",params![p.account_id,current])
+    } else if let Some(id)=input.id.filter(|id|id.len()==64&&id.bytes().all(|b|b.is_ascii_hexdigit())) {
+        if id==current {return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use Sign out for this device"}))).into_response();}
+        c.execute("DELETE FROM auth_sessions WHERE account_id=?1 AND token_hash=?2",params![p.account_id,id])
+    } else {return StatusCode::BAD_REQUEST.into_response();};
+    match result {Ok(count)=>Json(json!({"ok":true,"revoked":count})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response()}
 }
