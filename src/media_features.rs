@@ -38,7 +38,7 @@ pub async fn thumbnail(State(app): State<App>, Query(input): Query<ThumbnailQuer
         Ok(Ok(v)) => v,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    let time = (input.time / 10.0).floor() * 10.0;
+    let time = (input.time / 5.0).floor() * 5.0;
     let signature = format!("{}:{}:{:?}:{time}", input.path, stat.len(), stat.modified());
     let digest = ring::digest::digest(&ring::digest::SHA256, signature.as_bytes());
     let key = digest
