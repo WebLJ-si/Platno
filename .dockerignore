@@ -6,3 +6,10 @@ output
 tmp
 node_modules
 *.sqlite3*
+telemetry-server
+docs
+tests
+scripts
+.agents
+.github
+*.md

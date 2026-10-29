@@ -13,15 +13,25 @@ docker compose up -d --build
 
 Temporary conversion files (HLS segments, speech-sync scratch files) go to the system temp folder by default. Set `SMART_MEDIA_TRANSCODE_DIR` or use Settings → Conversion folder to put them on a faster or larger disk; in Docker, mount a volume there. Folders inside a media folder are refused, and orphaned session folders older than an hour are removed at startup.
 
-Open `http://127.0.0.1:8787`. Scan `/media` from Settings. The media mount is read-only; SQLite and private provider configuration are in the `plexv2-data` volume. The container runs as UID 10001: its media directory must be readable by that UID. When binding an existing data directory, make it writable by that UID too. Source paths imported from a host database must use the container's `/media` paths to play correctly. GPU pass-through is platform-specific; software conversion always remains available. Adaptive HLS encodes three renditions concurrently and needs more CPU than fixed quality.
+The host port defaults to 8787; set `PLEXV2_PORT` if another program already uses it.
 
-To update, pull the repository and run `docker compose up -d --build` again. Keep the data volume. Owner recovery uses `docker compose exec -it plexv2 smart-media-scanner reset-owner-password`. No public container registry image is published by this repository.
+Open `http://127.0.0.1:8787`. Scan `/media` from Settings. The media mount is read-only; SQLite and private provider configuration are in the `platno-data` volume. The container runs as UID 10001: its media directory must be readable by that UID. When binding an existing data directory, make it writable by that UID too. Source paths imported from a host database must use the container's `/media` paths to play correctly. GPU pass-through is platform-specific; software conversion always remains available. Adaptive HLS encodes three renditions concurrently and needs more CPU than fixed quality.
+
+To update, pull the repository and run `docker compose up -d --build` again. Keep the data volume. Owner recovery uses `docker compose exec -it platno smart-media-scanner reset-owner-password`. 
+### Publishing the image
+
+Nothing is published automatically. To share a ready-made image, pick one registry:
+
+- **GitHub Container Registry (recommended for this repository).** `.github/workflows/docker.yml` builds a `linux/amd64` + `linux/arm64` image and pushes `ghcr.io/weblj-si/platno` when you push a version tag such as `v0.2.0` (or run the workflow manually). It needs no secrets. Afterwards set the package to public in the repository's Packages settings so others can pull without signing in.
+- **Docker Hub.** `docker login`, then `docker buildx build --platform linux/amd64,linux/arm64 -t YOUR_NAME/platno:0.2.0 -t YOUR_NAME/platno:latest --push .`. Images go in your own namespace. The bare `library/` namespace on Docker Hub is reserved for Docker Official Images, which Docker's team reviews through the `docker-library` GitHub project; a personal project normally does not qualify.
+
+Others can then use the image with Compose without building it: set `PLEXV2_IMAGE=ghcr.io/weblj-si/platno:latest` (the default in `compose.yaml`), set `PLEXV2_MEDIA_DIR`, and run `docker compose pull && docker compose up -d`. Use `docker compose up -d --build` to build your own checkout instead. The image contains FFmpeg and runs as UID 10001; GPU encoders are not available inside it (software conversion is used).
 
 ## HTTPS reverse proxy
 
 Use a domain whose DNS points to your server and install Caddy. Copy `deploy/Caddyfile.example`, replace `media.example.com` with your domain, and run Caddy as a service. Keep the application's port bound to localhost; expose only the proxy. Caddy manages HTTPS certificates for eligible public domains. Set `SMART_MEDIA_COOKIE_SECURE=1` before starting the app behind HTTPS (for Compose: export it, then recreate the container). Secure cookies require HTTPS; plain HTTP sign-in will stop working with that setting.
 
-The example streams responses immediately and preserves same-origin byte ranges, HLS, and cookie authentication. If Caddy runs in another container, use a shared Docker network and proxy to `plexv2:8787`, rather than localhost. Do not add permissive CORS or cache authenticated API/media responses at the proxy.
+The example streams responses immediately and preserves same-origin byte ranges, HLS, and cookie authentication. If Caddy runs in another container, use a shared Docker network and proxy to `platno:8787`, rather than localhost. Do not add permissive CORS or cache authenticated API/media responses at the proxy.
 
 A private VPN such as Tailscale is another deployment option. Set it up on your own devices, make the localhost service reachable through your VPN/proxy configuration, and use HTTPS for installed PWA access. This project does not automatically provision tunnels, open router ports, or create external accounts.
 
@@ -33,13 +43,13 @@ Build with `cargo build --release --locked`. Run the absolute binary path under 
 
 ```ini
 [Unit]
-Description=PlexV2 media server
+Description=Platno media server
 After=network-online.target
 
 [Service]
 User=media
-ExecStart=/opt/plexv2/smart-media-scanner
-Environment=SMART_MEDIA_DATA=/var/lib/plexv2
+ExecStart=/opt/platno/smart-media-scanner
+Environment=SMART_MEDIA_DATA=/var/lib/platno
 Environment=SMART_MEDIA_HOST=127.0.0.1
 Environment=SMART_MEDIA_COOKIE_SECURE=1
 Restart=on-failure
