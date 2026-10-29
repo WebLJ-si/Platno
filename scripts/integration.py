@@ -6,15 +6,16 @@ def run(*args): return subprocess.run(args, check=True, capture_output=True)
 with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
     base=pathlib.Path(tmp); data=base/'data'; data.mkdir()
     sub=base/'test.srt'; sub.write_text('1\n00:00:01,000 --> 00:00:04,000\nSubtitle regression\n')
+    sub2=base/'test.sl.srt';sub2.write_text('1\n00:00:01,000 --> 00:00:04,000\nSlovenski podnapis\n')
     meta=base/'chapters.txt'; meta.write_text(';FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=3000\ntitle=Intro\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=3000\nEND=12000\ntitle=Story\n')
     video=base/'fixture.mkv'
-    run('ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24:duration=12','-f','lavfi','-i','sine=frequency=440:duration=12','-f','lavfi','-i','sine=frequency=880:duration=12','-i',str(sub),'-i',str(meta),'-map','0:v','-map','1:a','-map','2:a','-map','3:s','-map_metadata','4','-map_chapters','4','-c:v','libx264','-preset','ultrafast','-c:a','aac','-c:s','srt','-metadata:s:a:0','language=eng','-metadata:s:a:1','language=slv',str(video))
+    run('ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24:duration=12','-f','lavfi','-i','sine=frequency=440:duration=12','-f','lavfi','-i','sine=frequency=880:duration=12','-i',str(sub),'-i',str(meta),'-i',str(sub2),'-map','0:v','-map','1:a','-map','2:a','-map','3:s','-map','5:s','-map_metadata','4','-map_chapters','4','-c:v','libx264','-preset','ultrafast','-c:a','aac','-c:s','srt','-metadata:s:a:0','language=eng','-metadata:s:a:1','language=slv','-metadata:s:s:0','language=eng','-metadata:s:s:1','language=slv',str(video))
     direct=base/'direct.mp4';run('ffmpeg','-v','error','-i',str(video),'-map','0:v','-map','0:a:0','-c','copy',str(direct))
     hdr=base/'hdr.mkv';run('ffmpeg','-v','error','-f','lavfi','-i','testsrc2=size=160x90:rate=24:duration=3','-vf','format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc','-c:v','libx264','-preset','ultrafast',str(hdr))
     with socket.socket() as sock: sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     url=f'http://127.0.0.1:{port}'
     log=open(base/'server.log','w')
-    proc=subprocess.Popen([os.environ.get('PLEXV2_TEST_BINARY',str(ROOT/'target/debug/smart-media-scanner'))],cwd=ROOT,env={**os.environ,'SMART_MEDIA_DATA':str(data),'SMART_MEDIA_HOST':'127.0.0.1','SMART_MEDIA_PORT':str(port),'TMDB_TOKEN':''},stdout=log,stderr=log)
+    proc=subprocess.Popen([os.environ.get('PLEXV2_TEST_BINARY',str(ROOT/'target/debug/smart-media-scanner'))],cwd=ROOT,env={**os.environ,'SMART_MEDIA_DATA':str(data),'SMART_MEDIA_HOST':'127.0.0.1','SMART_MEDIA_PORT':str(port),'TMDB_TOKEN':'','OPENSUBTITLES_API_KEY':'','SMART_MEDIA_COOKIE_SECURE':'0'},stdout=log,stderr=log)
     jar=http.cookiejar.CookieJar(); client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     def request(path, body=None, status=200, headers=None, opener=None):
         req=urllib.request.Request(url+path,data=None if body is None else json.dumps(body).encode(),headers={**({'Content-Type':'application/json'} if body is not None else {}),**(headers or {})})
@@ -38,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         api('/api/auth/setup',{'email':'owner@example.test','password':'integration password 123','confirm_password':'integration password 123'})
         db=sqlite3.connect(data/'library.sqlite3')
         for n,path in enumerate([video,direct,hdr]):
-            result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','confidence':100,'requires_review':False,'subtitles':[]}
+            result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','confidence':100,'requires_review':False,'subtitles':[],'year':str(2020+n),'rating':[8,6,7][n],'runtime':[85,150,25][n],'genres':[['Comedy'],['Drama'],['Comedy']][n],'language':['en','sl','en'][n]}
             db.execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES(?,?,?,?,?,?,?)",(str(path),str(base),path.stat().st_size,0,'{}',json.dumps(result),'2026-10-29'))
             db.execute('INSERT INTO library_files(path,library_id) VALUES(?,(SELECT id FROM libraries WHERE kind=\'movie\' LIMIT 1))',(str(path),))
         db.commit()
@@ -46,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         q=urlencode({'path':str(video)})
         info=api('/api/playback/info?'+q)
         assert len(info['audio_tracks'])==2 and info['audio_tracks'][1]['language']=='slv',info
-        assert len(info['chapters'])==2 and info['chapters'][0]['tags']['title']=='Intro'
+        assert 'chapters' not in info
         assert info['direct'] is False and api('/api/playback/info?'+urlencode({'path':str(direct)}))['direct'] is True
         raw,h=request('/api/playback/file?'+urlencode({'path':str(direct)}),headers={'Range':'bytes=0-15'},status=206)
         assert len(raw)==16 and h['Content-Range'].startswith('bytes 0-15/')
@@ -81,12 +82,9 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert hdr_probe['streams'][0]['color_transfer']=='bt709',hdr_probe
         run('ffmpeg','-v','error','-i',str(hdr_ts),'-f','null','-')
         api('/api/playback/hls/stop',{'id':hdr_session['id']})
-        api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':0,'end':3}]})
-        assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
-        api('/api/admin/playback/markers',{'path':str(video),'markers':[{'kind':'intro','start':3,'end':1}]},status=400)
-        assert api('/api/playback/markers?'+q)['markers'][0]['end']==3
-        api('/api/admin/playback/markers',{'path':str(video),'markers':[]})
-        assert api('/api/playback/markers?'+q)=={'configured':True,'markers':[]}
+        for removed in ['/api/playback/markers','/api/admin/playback/markers','/api/playback/report','/api/admin/playback/reports']:
+            request(removed,status=404)
+            request(removed,{},status=404)
         api('/api/playback/watched',{'paths':[str(video)],'action':'watched'})
         assert api('/api/playback/progress?'+q)['completed']
         api('/api/playback/watched',{'paths':[str(video),'/not/in/library'],'action':'reset'},status=404)
@@ -99,10 +97,6 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert not api('/api/playback/progress?'+q)['completed'],'short videos must not complete at one third'
         api('/api/playback/progress',{'path':str(video),'position':11,'duration':12})
         assert api('/api/playback/progress?'+q)['completed']
-        report={'path':str(video),'message':'Synthetic playback report','mode':'transcode','quality':'auto','video_codec':'h264','audio_codec':'aac'}
-        api('/api/playback/report',report)
-        api('/api/playback/report',report,status=429)
-        assert api('/api/admin/playback/reports')['items'][0]['message']=='Synthetic playback report'
         health=api('/api/admin/health');assert health['ffmpeg']['available'] and health['ffprobe']['available'] and health['files']==3
         api('/api/user/settings',{'key':'playback_volume','value':'NaN'},status=400)
         api('/api/user/settings',{'key':'playback_volume','value':'0.35'})
@@ -131,15 +125,18 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         viewer=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         api('/api/auth/login',{'email':'viewer@example.test','password':'viewer password 123'},opener=viewer)
         api('/api/admin/health',status=403,opener=viewer)
-        api('/api/admin/playback/markers',{'path':str(video),'markers':[]},status=403,opener=viewer)
         request('/assets/hls-1.7.3.js',opener=viewer)
         owner_session_id=api('/api/auth/sessions')['items'][0]['id']
         assert len(api('/api/auth/sessions',opener=viewer)['items'])==1
         assert api('/api/auth/sessions',{'id':owner_session_id},opener=viewer)['revoked']==0
         api('/api/auth/me')
         api('/api/metadata/detail?kind=movie&id=1',opener=viewer)
-        if '--browser' in sys.argv: subprocess.run(['node',str(ROOT/'scripts/browser.cjs'),url],check=True,timeout=150)
-        print('PASS: isolated HTTP, audio tracks + decoded language, chapters, direct ranges, three HLS variants, validation, atomic watched/reset, profile isolation')
+        sys.path.insert(0,str(ROOT/'tests'))
+        from api_regressions import run_regressions
+        cases=run_regressions(api,request,db,base,video,direct)
+        print(f'PASS: {len(cases)} additional API feature groups',flush=True)
+        if '--browser' in sys.argv: subprocess.run(['node',str(ROOT/'scripts/browser.cjs'),url],check=True,timeout=180)
+        print('PASS: isolated HTTP, audio tracks + decoded language, removed-feature checks, direct ranges, three HLS variants, validation, atomic watched/reset, profile isolation')
     finally:
         proc.terminate()
         try: proc.wait(timeout=10)
