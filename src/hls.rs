@@ -62,11 +62,15 @@ pub(crate) fn validate_work_dir(app: &App, raw: &str) -> Result<PathBuf, String>
         let rows: Vec<String> = c.prepare(&format!("SELECT {column} FROM {table}{filter}")).and_then(|mut s| s.query_map([], |r| r.get(0))?.collect()).unwrap_or_default();
         roots.extend(rows.iter().filter_map(|raw| serde_json::from_str::<Vec<String>>(raw).ok()).flatten());
     }
-    std::fs::create_dir_all(raw).map_err(|e| format!("Cannot create that folder: {e}"))?;
-    let folder = std::fs::canonicalize(raw).map_err(|e| format!("Cannot use that folder: {e}"))?;
+    // Judge the final location before creating anything, so a refused folder leaves no trace.
+    let requested = std::path::Path::new(raw);
+    let existing = requested.ancestors().find(|p| p.exists()).ok_or("That folder cannot be reached.")?;
+    let folder = std::fs::canonicalize(existing).map_err(|e| format!("Cannot use that folder: {e}"))?.join(requested.strip_prefix(existing).unwrap_or(std::path::Path::new("")));
     if roots.iter().any(|root| std::fs::canonicalize(root).is_ok_and(|root| folder.starts_with(root))) {
         return Err("Choose a folder outside your media folders, so temporary video files are not scanned.".into());
     }
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Cannot create that folder: {e}"))?;
+    let folder = std::fs::canonicalize(&folder).map_err(|e| format!("Cannot use that folder: {e}"))?;
     let probe = folder.join(format!(".plexv2-write-test-{}", std::process::id()));
     std::fs::write(&probe, b"x").and_then(|_| std::fs::remove_file(&probe)).map_err(|_| "The server cannot write to that folder.".to_string())?;
     Ok(folder)
@@ -149,7 +153,7 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     let quality=input.quality.as_deref().unwrap_or("1080");
     let tiers: Vec<&str> = if quality=="auto" {vec!["480","720","1080"]} else {vec![quality]};
     if tiers.iter().any(|q|playback::video_bitrate(&app,q).is_none()) { return error(StatusCode::BAD_REQUEST,"Invalid quality"); }
-    let Ok(permit)=playback::CONVERSION_LIMIT.clone().try_acquire_owned() else {return error(StatusCode::TOO_MANY_REQUESTS,"All four conversion slots are busy. Try again shortly.");};
+    let permit = match playback::acquire_conversion(&app) { Ok(p) => p, Err(e) => return error(StatusCode::TOO_MANY_REQUESTS, &e) };
     let audio_map = match playback::audio_map(&path, input.audio).await { Ok(v)=>v, Err(e)=>return error(StatusCode::BAD_REQUEST,&e) };
     use ring::rand::SecureRandom;
     let mut random=[0u8;32];

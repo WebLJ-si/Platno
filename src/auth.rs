@@ -169,7 +169,7 @@ pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Ne
             else { true };
         if !role_ok { return (StatusCode::FORBIDDEN, Json(json!({"error":"Your role cannot access this feature"}))).into_response(); }
         if p.role == "user" {
-            let allowed = public || uri.starts_with("/api/telemetry/") || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/metadata/detail" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
+            let allowed = public || uri.starts_with("/api/telemetry/") || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/covers/") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/metadata/detail" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
             if !allowed { return (StatusCode::FORBIDDEN, Json(json!({"error":"User profiles can only browse and watch the library"}))).into_response(); }
         }
         req.extensions_mut().insert(p);
@@ -362,6 +362,7 @@ pub async fn server_info(State(app): State<App>) -> Json<Value> {
 pub async fn server_settings(State(app): State<App>) -> Json<Value> {
     let rows:Value=conn(&app.db).prepare("SELECT key,value FROM server_settings").and_then(|mut s|s.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map(|v|json!(v.into_iter().collect::<std::collections::HashMap<_,_>>())).unwrap_or(json!({}));
     let mut rows=rows;
+    rows["effective_conversion_slots"]=json!(crate::playback::conversion_slots(&app));
     rows["effective_transcode_dir"]=json!(crate::hls::work_root(&app));
     rows["transcode_dir_from_environment"]=json!(std::env::var_os(crate::hls::WORK_DIR_ENV).is_some_and(|v|!v.is_empty()));
     Json(rows)
@@ -375,6 +376,19 @@ pub async fn save_server_setting(State(app): State<App>, Json(input): Json<Setti
     if input.key=="transcode_quality" {
         if !matches!(input.value.as_str(),"speed"|"balanced"|"quality") { return StatusCode::BAD_REQUEST.into_response(); }
         return match conn(&app.db).execute("INSERT INTO server_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![input.key,input.value]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+    }
+    if input.key=="conversion_slots" {
+        let Some(slots)=input.value.parse::<usize>().ok().filter(|n|(1..=crate::playback::MAX_CONVERSION_SLOTS).contains(n)) else {return (StatusCode::BAD_REQUEST,Json(json!({"error":"Choose between 1 and 8 simultaneous conversions."}))).into_response()};
+        return match conn(&app.db).execute("INSERT INTO server_settings(key,value) VALUES('conversion_slots',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[slots.to_string()]) { Ok(_)=>Json(json!({"ok":true,"effective_conversion_slots":slots})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+    }
+    if input.key=="setup_guide" {
+        let c=conn(&app.db);
+        let result=match input.value.as_str() {
+            "done"|"skipped"=>c.execute("INSERT INTO server_settings(key,value) VALUES('setup_guide',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[&input.value]),
+            "reset"=>c.execute("DELETE FROM server_settings WHERE key='setup_guide'",[]),
+            _=>return StatusCode::BAD_REQUEST.into_response(),
+        };
+        return match result { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
     }
     if input.key=="transcode_dir" {
         if std::env::var_os(crate::hls::WORK_DIR_ENV).is_some_and(|v|!v.is_empty()) {return (StatusCode::CONFLICT,Json(json!({"error":"The folder is fixed by the SMART_MEDIA_TRANSCODE_DIR environment variable."}))).into_response()}

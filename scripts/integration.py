@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
     with socket.socket() as sock: sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
     url=f'http://127.0.0.1:{port}'
     log=open(base/'server.log','w')
-    proc=subprocess.Popen([os.environ.get('PLEXV2_TEST_BINARY',str(ROOT/'target/debug/smart-media-scanner'))],cwd=ROOT,env={**os.environ,'SMART_MEDIA_DATA':str(data),'SMART_MEDIA_HOST':'127.0.0.1','SMART_MEDIA_PORT':str(port),'TMDB_TOKEN':'','OPENSUBTITLES_API_KEY':'','SMART_MEDIA_COOKIE_SECURE':'0'},stdout=log,stderr=log)
+    proc=subprocess.Popen([os.environ.get('PLEXV2_TEST_BINARY',str(ROOT/'target/debug/smart-media-scanner'))],cwd=ROOT,env={**os.environ,'SMART_MEDIA_DATA':str(data),'SMART_MEDIA_HOST':'127.0.0.1','SMART_MEDIA_PORT':str(port),'TMDB_TOKEN':'','OPENSUBTITLES_API_KEY':'','SMART_MEDIA_COOKIE_SECURE':'0','SMART_MEDIA_WIKIDATA':'off'},stdout=log,stderr=log)
     jar=http.cookiejar.CookieJar(); client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     def request(path, body=None, status=200, headers=None, opener=None):
         req=urllib.request.Request(url+path,data=None if body is None else json.dumps(body).encode(),headers={**({'Content-Type':'application/json'} if body is not None else {}),**(headers or {})})
@@ -37,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert request('/assets/icon-192.png',opener=urllib.request.build_opener())[0].startswith(b'\x89PNG')
         assert b'Never cache authenticated' in request('/sw.js',opener=urllib.request.build_opener())[0]
         api('/api/auth/setup',{'email':'owner@example.test','password':'integration password 123','confirm_password':'integration password 123'})
+        api('/api/owner/settings',{'key':'setup_guide','value':'done'})  # the first-run guide has its own browser test
         db=sqlite3.connect(data/'library.sqlite3')
         for n,path in enumerate([video,direct,hdr]):
             result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','confidence':100,'requires_review':False,'subtitles':[],'year':str(2020+n),'rating':[8,6,7][n],'runtime':[85,150,25][n],'genres':[['Comedy'],['Drama'],['Comedy']][n],'language':['en','sl','en'][n]}

@@ -29,7 +29,7 @@ Requested 2026-10-29. The former local playback-report button, endpoints and adm
 - [ ] Server-enforced parental/library restrictions with trustworthy rating data and bypass tests.
 - [ ] PGS/VobSub subtitle burn-in with real fixtures and seek/ABR validation.
 - [ ] Native browser/device verification for Safari, Firefox, iOS, Android and TV remotes.
-- [ ] Build/run the Linux Docker image and test HTTPS deployment in an actual target environment.
+- [ ] Test the Linux Docker image on amd64 and with HTTPS in an actual target environment (the arm64 image builds and runs; see `docs/validation.md`).
 - [ ] Revisit other ideas in `docs/feature-review.md` independently; that document records evaluation, not completion promises.
 
 Manual skip markers and chapter navigation were removed at the user's request on 2026-10-29. They are not part of the current player. Legacy database tables from older builds may remain unused; no startup operation deletes historical user data.

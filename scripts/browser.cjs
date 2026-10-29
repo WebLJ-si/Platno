@@ -41,6 +41,8 @@ const playwright=require('playwright');
 
   await page.locator('.detail-files summary').click();await page.getByRole('button',{name:'Edit identification',exact:true}).click();
   await page.getByRole('heading',{name:'Edit identification',exact:true}).waitFor();assert.equal(await page.locator('#edit-query').inputValue(),'Fixture 0');
+  // Without a TMDB key the movie search explains how to add one instead of failing silently.
+  await page.locator('.sg-help').waitFor();assert((await page.locator('.sg-help').innerText()).toLowerCase().includes('tmdb key needed'));await page.locator('#sg-help-close').click();await page.locator('.sg-help').waitFor({state:'detached'});
   await page.getByRole('button',{name:'Close',exact:true}).click();await page.locator('.card').filter({has:page.getByRole('heading',{name:'Fixture 0',exact:true})}).click();
   assert(await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).isHidden());
   await page.getByRole('button',{name:'✓ Mark movie watched',exact:true}).click();await page.locator('#watched-status').filter({hasText:'Marked as watched.'}).waitFor();assert(await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).isVisible());
@@ -122,7 +124,7 @@ const playwright=require('playwright');
   await context.setOffline(true);await page.goto(process.argv[2],{waitUntil:'domcontentloaded'});
   await page.getByRole('heading',{name:'Your media server is unavailable',exact:true}).waitFor();
   await context.setOffline(false);await page.goto(process.argv[2]);await page.locator('#account-controls .profile-trigger').waitFor();
-  const help=await context.newPage();await help.goto(process.argv[2]+'/help');await help.getByRole('heading',{name:'PlexV2: navodila za uporabo',exact:true}).waitFor();
+  const help=await context.newPage();await help.goto(process.argv[2]+'/help');await help.getByRole('heading',{name:'PlexV2: user guide',exact:true}).waitFor();
   await help.setViewportSize({width:390,height:844});assert(await help.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await help.close();
   await page.locator('#account-controls .profile-trigger').click();await page.getByRole('button',{name:'Sign out',exact:true}).click();await page.locator('#email').waitFor();
   const viewerContext=await browser.newContext();const viewer=await viewerContext.newPage();

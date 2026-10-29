@@ -15,7 +15,25 @@ use tokio::{
 };
 use tokio_util::io::ReaderStream;
 use std::sync::{Arc, LazyLock};
-pub(crate) static CONVERSION_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+pub(crate) const MAX_CONVERSION_SLOTS: usize = 8;
+pub(crate) static CONVERSION_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONVERSION_SLOTS)));
+// The owner-chosen number of simultaneous conversions (1..=8, default 4).
+pub(crate) fn conversion_slots(app: &App) -> usize {
+    db(app)
+        .query_row("SELECT value FROM server_settings WHERE key='conversion_slots'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map_or(4, |n| n.clamp(1, MAX_CONVERSION_SLOTS))
+}
+pub(crate) fn acquire_conversion(app: &App) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    let cap = conversion_slots(app);
+    let busy = || format!("All {cap} conversion slots are busy. Try again shortly.");
+    let permit = CONVERSION_LIMIT.clone().try_acquire_owned().map_err(|_| busy())?;
+    if MAX_CONVERSION_SLOTS - CONVERSION_LIMIT.available_permits() > cap {
+        return Err(busy());
+    }
+    Ok(permit)
+}
 static DIRECT_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(64)));
 static PROBE_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(8)));
 static SUBTITLE_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
@@ -84,7 +102,7 @@ pub async fn available_h264_encoders() -> Vec<&'static str> {
     let text=String::from_utf8_lossy(&output.stdout).to_string()+&String::from_utf8_lossy(&output.stderr);
     ["libx264","h264_videotoolbox","h264_nvenc","h264_qsv"].into_iter().filter(|name|text.lines().any(|line|line.split_whitespace().any(|word|word==*name))).collect()
 }
-async fn encoder_works(encoder: &str) -> bool {
+pub(crate) async fn encoder_works(encoder: &str) -> bool {
     let mut cmd=Command::new(binary("ffmpeg"));
     cmd.args(["-v","error","-nostdin","-f","lavfi","-i","color=c=black:s=64x64:d=0.04","-frames:v","1","-an","-c:v",encoder]);
     match encoder { "h264_nvenc"=>{cmd.args(["-preset","p4"]);},"h264_qsv"=>{cmd.args(["-preset","veryfast"]);},"h264_videotoolbox"=>{cmd.args(["-realtime","1","-allow_sw","1"]);},_=>{cmd.args(["-preset","ultrafast"]);} }
@@ -342,7 +360,7 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
     if !start.is_finite() || !(0.0..=1_000_000.0).contains(&start) {
         return fail(StatusCode::BAD_REQUEST, "Invalid playback position");
     }
-    let Ok(permit)=CONVERSION_LIMIT.clone().try_acquire_owned() else {return fail(StatusCode::TOO_MANY_REQUESTS,"All four conversion slots are busy. Try again shortly.");};
+    let permit = match acquire_conversion(&app) { Ok(p) => p, Err(e) => return fail(StatusCode::TOO_MANY_REQUESTS, &e) };
     if tokio::fs::metadata(&path).await.is_err() {
         return fail(StatusCode::NOT_FOUND, "The video file is unavailable");
     }

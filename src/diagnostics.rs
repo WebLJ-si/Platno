@@ -28,6 +28,7 @@ pub async fn health(State(app): State<App>) -> Json<Value> {
         .filter_map(|(path, _, raw)| {
             let result: Value = serde_json::from_str(raw).ok()?;
             let matched = result["provider_id"].as_i64().is_some()
+                && result["provider"] != "local"
                 && result["requires_review"] != true
                 && result["confidence"].as_f64().unwrap_or(0.0) > 40.0;
             if !matched {

@@ -192,7 +192,7 @@ def run_regressions(api, request, db, base, video, direct):
     with case('scanning a real tree: unicode, nesting, ignored files, symlink loops, unreadable folders, locks, rescans and removed media'):
         tree = base / 'scan-tree'
         for relative in ['Movies/Blade.Runner.2049.2017.1080p.BluRay.mkv', 'Movies/Zażółć gęślą jaźń (2020).mp4',
-                         'Movies/Deep/A/B/C/D/Nested.Film.2015.avi', 'Movies/empty.2012.mkv', 'Show/Extras/Interview.mkv',
+                         'Movies/Deep/A/B/C/D/Nested.Film.2015.avi', 'Movies/empty.2012.mkv', 'Show/Extras/Interview.mkv', 'Shows/Zzq Testshow Qx/Season 01/Zzq.Testshow.Qx.S01E01.mkv', 'Shows/Zzq Testshow Qx/Season 01/Zzq.Testshow.Qx.S01E02.mkv',
                          'Movies/notes.txt', 'Movies/.DS_Store', 'Movies/poster.jpg']:
             target = tree / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -202,6 +202,8 @@ def run_regressions(api, request, db, base, video, direct):
         denied.mkdir()
         (denied / 'Hidden.Film.2001.mkv').write_bytes(b'x')
         denied.chmod(0)
+
+        db.execute("INSERT OR REPLACE INTO cache VALUES('tvmaze:search:zzq testshow qx','[]',?)", (int(time.time()),)); db.commit()  # keeps the scan offline
 
         def scan(full=False):
             api('/api/scan', {'roots': [str(tree)], 'full_scan': full})
@@ -217,20 +219,27 @@ def run_regressions(api, request, db, base, video, direct):
         try:
             api('/api/admin/library-settings', {'auto_sort': True, 'scan_roots': [str(tree)]})
             status = scan()
-            assert status['phase'] == 'Complete' and status['processed'] == status['total'] == 5, status
+            assert status['phase'] == 'Complete' and status['processed'] == status['total'] == 7, status
             assert any('denied' in e for e in status['errors']), status['errors']
             files = listed()
-            assert set(files) == {'Blade.Runner.2049.2017.1080p.BluRay.mkv', 'Zażółć gęślą jaźń (2020).mp4', 'Nested.Film.2015.avi', 'empty.2012.mkv', 'Interview.mkv'}, set(files)
+            assert set(files) == {'Blade.Runner.2049.2017.1080p.BluRay.mkv', 'Zażółć gęślą jaźń (2020).mp4', 'Nested.Film.2015.avi', 'empty.2012.mkv', 'Interview.mkv', 'Zzq.Testshow.Qx.S01E01.mkv', 'Zzq.Testshow.Qx.S01E02.mkv'}, set(files)
             blade = files['Blade.Runner.2049.2017.1080p.BluRay.mkv']
             assert (blade['parsed']['title'], blade['parsed']['year'], blade['parsed']['kind']) == ('Blade Runner 2049', 2017, 'movie'), blade['parsed']
             assert files['Interview.mkv']['result']['kind'] == 'extra'
+            # With no provider key every title still gets a name and a stable identity from its file name.
+            local = blade['result']
+            assert (local['provider'], local['title'], local['year'], local['kind']) == ('local', 'Blade Runner 2049', '2017', 'movie'), local
+            assert local['provider_id'] > 10**12 and local['confidence'] > 40 and local['requires_review'] is False, local
+            first, second = files['Zzq.Testshow.Qx.S01E01.mkv']['result'], files['Zzq.Testshow.Qx.S01E02.mkv']['result']
+            assert (first['provider'], first['title'], first['season'], first['episodes'], second['episodes']) == ('local', 'Zzq Testshow Qx', 1, [1], [2]), (first, second)
+            assert first['provider_id'] == second['provider_id'], 'one show, one identity'
             assert 'Hidden.Film.2001.mkv' not in files and 'loop' not in files
             movie_library = next(x['id'] for x in api('/api/libraries')['libraries'] if x['kind'] == 'movie')
             in_movies = {pathlib.Path(f['path']).name for f in api(f'/api/libraries/{movie_library}/files')['files']}
             assert 'Zażółć gęślą jaźń (2020).mp4' in in_movies and 'Interview.mkv' not in in_movies
 
             skipped = lambda st: sum(1 for e in st['events'] if e['message'].startswith('Skipped unchanged or locked'))
-            assert skipped(scan()) == 5
+            assert skipped(scan()) == 7
 
             path = blade['path']
             for bad in [{'kind': 'podcast'}, {'kind': 'movie', 'title': 'bad\u0000title'}, {'kind': 'movie', 'provider_id': 0}, {'kind': 'tv', 'season': 5000}]:
@@ -239,6 +248,32 @@ def run_regressions(api, request, db, base, video, direct):
             scan(full=True)
             locked = listed()['Blade.Runner.2049.2017.1080p.BluRay.mkv']
             assert locked['locked'] is True and locked['result']['title'] == 'Chosen by hand', locked['result']
+
+            # Hand edits: validated, locked against rescans, and shared by every file of the title.
+            edit = {'paths': [path], 'title': '  Edited Blade  ', 'year': '2017', 'description': 'Written by hand.\nSecond line.', 'genres': ['Sci-Fi', 'Drama']}
+            for bad in [{'paths': []}, {'paths': [path], 'title': '   '}, {'paths': [path], 'year': '99'}, {'paths': [path], 'genres': ['']},
+                        {'paths': [path], 'poster': 'https://evil.test/x.png'}, {'paths': [path], 'poster': '/api/covers/0123456789abcdef0123456789abcdef.png'}]:
+                api('/api/admin/title', bad, status=400)
+            api('/api/admin/title', {'paths': [path, str(tree / 'missing.mkv')], 'title': 'x'}, status=404)
+            assert listed()['Blade.Runner.2049.2017.1080p.BluRay.mkv']['result']['title'] == 'Chosen by hand', 'a failed edit changes nothing'
+            api('/api/admin/title', edit)
+            scan(full=True)
+            edited = listed()['Blade.Runner.2049.2017.1080p.BluRay.mkv']
+            assert (edited['result']['title'], edited['result']['genres'], edited['locked'], edited['result']['manual_edit']) == ('Edited Blade', ['Sci-Fi', 'Drama'], True, True), edited['result']
+            episode_path = files['Zzq.Testshow.Qx.S01E02.mkv']['path']
+            for bad in [{'path': episode_path, 'season': 1001, 'episodes': [1]}, {'path': episode_path, 'season': 1, 'episodes': [0]}]:
+                api('/api/admin/episode', bad, status=400)
+            api('/api/admin/episode', {'path': str(tree / 'missing.mkv'), 'season': 1, 'episodes': [1]}, status=404)
+            api('/api/admin/episode', {'path': episode_path, 'season': 2, 'episodes': [7, 8], 'title': 'Fixed by hand'})
+            scan(full=True)
+            fixed = listed()['Zzq.Testshow.Qx.S01E02.mkv']['result']
+            assert (fixed['season'], fixed['episodes'], fixed['episode_title']) == (2, [7, 8], 'Fixed by hand'), fixed
+            for url in ['/api/covers/0123456789abcdef0123456789abcdef.png', '/api/covers/..%2Fetc%2Fpasswd', '/api/covers/short.png', '/api/covers/0123456789abcdef0123456789abcdef.svg']:
+                request(url, status=404)
+                request(url, status=404, opener=user)
+            api('/api/admin/title', edit, status=403, opener=user)
+            api('/api/admin/episode', {'path': episode_path, 'season': 1, 'episodes': [1]}, status=403, opener=user)
+            api('/api/admin/covers', None, status=403, opener=user)
 
             (tree / 'Show/Extras/Interview.mkv').unlink()
             scan()
@@ -257,6 +292,46 @@ def run_regressions(api, request, db, base, video, direct):
                 db.execute(f'DELETE FROM {table} WHERE path LIKE ?', (str(tree.resolve()).replace('%', '[%]') + '/%',))
             db.commit()
             assert db.execute('SELECT COUNT(*) FROM files').fetchone()[0] == 3
+    with case('first-run guide APIs: hardware facts, folder checks, conversion slots, guide state, provider status and key-missing codes'):
+        system = api('/api/owner/system')
+        assert system['cpu_threads'] >= 1 and system['ffmpeg'] is True and 'libx264' in system['encoders'], system
+        assert set(system['usable_encoders']) <= set(system['encoders']) and 'libx264' in system['usable_encoders'], system
+        assert 1 <= system['recommended_slots'] <= 6 and system['max_slots'] == 8 and system['data_dir'] and system['port'] >= 1
+        for path, reason in [(str(base), 'ok'), (str(base / 'missing-folder'), 'missing'), ('relative/path', 'invalid'), (str(video), 'not_folder'), ('', 'invalid')]:
+            assert api('/api/admin/check-folder', {'path': path})['reason'] == reason, path
+        api('/api/admin/check-folder', {'path': str(base)}, opener=admin)
+        for path in ['/api/owner/system']:
+            api(path, status=403, opener=admin); api(path, status=403, opener=user)
+        api('/api/admin/check-folder', {'path': str(base)}, status=403, opener=user)
+        for bad in ['0', '9', '-1', 'abc', '', '2.5']:
+            api('/api/owner/settings', {'key': 'conversion_slots', 'value': bad}, status=400)
+        assert api('/api/owner/settings', {'key': 'conversion_slots', 'value': '2'})['effective_conversion_slots'] == 2
+        started = []
+        for _ in range(8):
+            try:
+                started.append(api('/api/playback/hls/start', {'path': str(video), 'quality': '480'})['id'])
+            except AssertionError:
+                break
+        assert len(started) == 2, started
+        refused = api('/api/playback/hls/start', {'path': str(video), 'quality': '480'}, status=429)
+        assert 'All 2 conversion slots' in refused['error'], refused
+        for sid in started:
+            api('/api/playback/hls/stop', {'id': sid})
+        api('/api/owner/settings', {'key': 'conversion_slots', 'value': '4'})
+        api('/api/owner/settings', {'key': 'setup_guide', 'value': 'bogus'}, status=400)
+        api('/api/owner/settings', {'key': 'setup_guide', 'value': 'skipped'})
+        assert api('/api/owner/settings')['setup_guide'] == 'skipped'
+        api('/api/owner/settings', {'key': 'setup_guide', 'value': 'reset'})
+        assert 'setup_guide' not in api('/api/owner/settings')
+        api('/api/owner/settings', {'key': 'setup_guide', 'value': 'done'})
+        api('/api/owner/settings', {'key': 'setup_guide', 'value': 'done'}, status=403, opener=admin)
+        assert api('/api/admin/provider-status') == {'tmdb': False, 'opensubtitles': False}
+        api('/api/admin/provider-status', opener=admin)
+        api('/api/admin/provider-status', status=403, opener=user)
+        for path, body, status, code in [('/api/metadata/search?kind=movie&q=x', None, 400, 'tmdb_key_missing'),
+                                         ('/api/metadata/match', {'path': str(video), 'kind': 'movie', 'id': 5}, 400, 'tmdb_key_missing'),
+                                         ('/api/subtitles/search?q=x', None, 400, 'opensubtitles_key_missing')]:
+            assert api(path, body, status=status)['code'] == code, path
     with case('owner-chosen conversion folder: validation, use by HLS, cleanup and reset'):
         import shutil, tempfile
         outside = pathlib.Path(tempfile.mkdtemp(prefix='plexv2-work-'))  # the fixture media root is the whole test directory

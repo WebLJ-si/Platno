@@ -8,7 +8,7 @@ import http.cookiejar, json, os, pathlib, re, socket, subprocess, sys, tempfile,
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 # Opens a native dialog or ends the session the fuzzer itself depends on.
 SKIP = {'/api/choose-folder', '/api/auth/logout', '/api/scan'}
-SAMPLES = {'id': '1', 'file': 'index.m3u8'}
+SAMPLES = {'id': '1', 'file': 'index.m3u8', 'name': 'x'}
 BODIES = [
     b'', b'null', b'[]', b'{}', b'"text"', b'0', b'true', b'{"path":null}', b'{"path":123}', b'{"path":"\\u0000"}',
     b'{"id":-1,"kind":"movie"}', b'{"id":9223372036854775808}', b'{"enabled":"yes"}', b'{"key":"x","value":"y"}',
@@ -28,13 +28,13 @@ def free_port():
 
 def main():
     binary = os.environ.get('PLEXV2_TEST_BINARY', str(ROOT / 'target/debug/smart-media-scanner'))
-    routes = sorted({m.replace('{id}', SAMPLES['id']).replace('{file}', SAMPLES['file'])
+    routes = sorted({m.replace('{id}', SAMPLES['id']).replace('{file}', SAMPLES['file']).replace('{name}', SAMPLES['name'])
                      for m in re.findall(r'\.route\(\s*"(/[^"]*)"', (ROOT / 'src/main.rs').read_text())})
     with tempfile.TemporaryDirectory(prefix='plexv2-fuzz-') as tmp:
         port = free_port()
         url = f'http://127.0.0.1:{port}'
         env = {**os.environ, 'SMART_MEDIA_DATA': tmp, 'SMART_MEDIA_HOST': '127.0.0.1', 'SMART_MEDIA_PORT': str(port),
-               'TMDB_TOKEN': '', 'OPENSUBTITLES_API_KEY': '', 'SMART_MEDIA_COOKIE_SECURE': '0'}
+               'TMDB_TOKEN': '', 'OPENSUBTITLES_API_KEY': '', 'SMART_MEDIA_COOKIE_SECURE': '0', 'SMART_MEDIA_WIKIDATA': 'off'}
         proc = subprocess.Popen([binary], cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         failures, sent = [], 0

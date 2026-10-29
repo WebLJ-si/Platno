@@ -23,6 +23,8 @@ The runner builds a locked release executable and tests that executable. Each co
 - `scripts/integration.py` creates real synthetic media and decodes actual HLS/progressive output. `tests/api_regressions.py` adds named feature groups for the rest of the API, including failure paths and roles.
 - `scripts/browser.cjs` drives actual Chrome, observes runtime errors, and uses visible UI for major flows. It verifies 0/1/2 audio-track visibility using three different source files.
 - `tests/api-fuzz.py` sends ~2300 malformed requests (bad JSON, wrong types, huge/NUL/Unicode values, NaN/overflow queries) to every route of a disposable server and fails on any HTTP 500, dropped connection, hang or server exit. It skips the native folder chooser, logout and scan routes.
+- `tests/title-editor-browser.cjs` (with `--browser`) checks the no-key experience in Chrome: unidentified titles get a name and default picture, series keep their seasons and episodes, and the name, details, cover and episodes can be edited by hand, survive full rescans, and apply to new episodes; viewers cannot edit. Rust tests cover the Wikidata choice rules (ambiguous titles are never guessed), parsing, stable local ids, cover content checks and edit validation; the API regression covers validation, locking and permissions.
+- `tests/setup-guide-browser.cjs` (with `--browser`) drives real Chrome through the first-run guide: folder checks, conversion folder refusal, hardware facts, a real scan, accounts, skip warnings on the key steps, remote access, the summary and re-run, the missing-key help dialog (owner and administrator wording, scan warning once per session), owner-only display, Escape and focus containment, reduced motion and 320–1440 px layout.
 - `tests/telemetry-forwarding.py` runs a beta server against a stub collector on localhost (plain HTTP is accepted only for loopback endpoints) and checks heartbeat and error forwarding, schema validity against the real collector, rejection of private fields, owner opt-out, stable channel and `SMART_MEDIA_TELEMETRY=off`. The live production relay check (`telemetry-server/tests/live-relay.cjs --live`) remains an explicit manual step.
 - `tests/help-renderer.py` checks HTML escaping, Unicode, code fences and generated-page parity. `render-help.py --check` guards against stale bundled help.
 
@@ -82,7 +84,7 @@ The runner builds a locked release executable and tests that executable. Each co
 | PWA | HTTP + Chrome | assets, manifest, installed worker, offline fallback and return online |
 | Help/docs | Python + HTTP + Chrome | generated parity, escaping, public access, readable mobile layout |
 | Removed features | Node + HTTP + Chrome | no marker/report/chapter controls or implementations, old routes 404, fresh database lacks removed tables |
-| Docker configuration | Manual command | Compose interpolation/config syntax; no daemon-backed build/run in this environment |
+| Docker configuration | Manual commands | Compose syntax, a real image build, healthy start, FFmpeg filters, scan and HLS conversion inside the container (arm64); amd64 and the publishing workflow are untested |
 
 ## Known gaps
 

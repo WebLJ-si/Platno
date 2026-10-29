@@ -1,11 +1,13 @@
 mod auth;
 mod diagnostics;
+mod free_metadata;
 mod hls;
 mod media_features;
 mod parser;
 mod playback;
 mod processes;
 mod remote_access;
+mod setup_guide;
 mod subtitle_sync;
 mod telemetry;
 use axum::{
@@ -422,7 +424,7 @@ async fn identify_collection_short(app: &App, p: &Parsed, subs: &[String]) -> Op
         return None;
     }
     let (film, detail) = eligible.pop()?;
-    let mut result = json!({"kind":"movie","title":film["title"],"provider":"tmdb","provider_id":film["id"],"year":film["release_date"],"description":film["overview"],"confidence":95,"explanation":"Standalone animated short: exact title, collection characters, genre and runtime verified with TMDB", "subtitles":subs, "candidates":[], "order":"aired", "requires_review":false,"matcher_version":6,"collection_title":collection,"runtime":detail["runtime"]});
+    let mut result = json!({"kind":"movie","title":film["title"],"provider":"tmdb","provider_id":film["id"],"year":film["release_date"],"description":film["overview"],"confidence":95,"explanation":"Standalone animated short: exact title, collection characters, genre and runtime verified with TMDB", "subtitles":subs, "candidates":[], "order":"aired", "requires_review":false,"matcher_version":7,"collection_title":collection,"runtime":detail["runtime"]});
     if let Some(poster) = film["poster_path"].as_str() {
         if let Ok(config) = cached(
             app,
@@ -450,8 +452,14 @@ async fn identify_collection_short(app: &App, p: &Parsed, subs: &[String]) -> Op
     }
     Some(result)
 }
+// Every title ends up with a name and an identity, even when no provider (or key) is available.
 async fn identify(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
-    let mut result = json!({"kind":p.kind,"title":p.title,"season":p.season,"episodes":p.episodes,"confidence":0,"explanation":p.explanation,"subtitles":subs,"candidates":[],"provider":"","order":"aired","requires_review":false,"matcher_version":6});
+    let mut result = identify_online(app, p, subs).await;
+    free_metadata::finish_unmatched(app, p, &mut result).await;
+    result
+}
+async fn identify_online(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
+    let mut result = json!({"kind":p.kind,"title":p.title,"season":p.season,"episodes":p.episodes,"episode_title":p.episode_title,"year":p.year.map(|y|y.to_string()),"confidence":0,"explanation":p.explanation,"subtitles":subs,"candidates":[],"provider":"","order":"aired","requires_review":false,"matcher_version":7});
     if p.kind == "extra" {
         return result;
     }
@@ -889,6 +897,15 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
             let unmatched_movie = previous_result["kind"] == "movie"
                 && previous_result["provider_id"].is_null()
                 && version < 6;
+            // Results from before names were kept locally, lookups that failed, and free-source
+            // movies once a TMDB key is available are all worth another attempt.
+            let unnamed = matches!(previous_result["kind"].as_str(), Some("movie" | "tv"))
+                && previous_result["provider_id"].is_null()
+                && version < 7;
+            let retry_lookup = previous_result["lookup_failed"] == true;
+            let upgrade_to_tmdb = previous_result["kind"] == "movie"
+                && matches!(previous_result["provider"].as_str(), Some("local" | "wikidata"))
+                && !tmdb_token(&app).is_empty();
             let old_range_count = previous_result["episodes"]
                 .as_array()
                 .map_or(0, |a| a.len());
@@ -908,6 +925,9 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
                     && !old_matcher
                     && !stale_range
                     && !unmatched_movie
+                    && !unnamed
+                    && !retry_lookup
+                    && !upgrade_to_tmdb
                     && !stale_review
                     && !old_region_name
                     && !stale_bonus
@@ -1374,8 +1394,11 @@ fn files_blocking(app: &App) -> Json<Value> {
     let details:HashMap<String,Value>=c.prepare("SELECT key,value FROM cache WHERE key LIKE 'tmdb:movie-detail:%' OR key LIKE 'tvmaze:show:%'").and_then(|mut s|s.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).unwrap_or_default().into_iter().filter_map(|(k,v)|serde_json::from_str(&v).ok().map(|v|(k,v))).collect();
     for row in &mut rows {
         let result=&mut row["result"];
+        let provider=result["provider"].as_str().unwrap_or("");
         let key=if result["kind"]=="movie" {format!("tmdb:movie-detail:{}",result["provider_id"])} else {format!("tvmaze:show:{}",result["provider_id"])};
-        if let Some(detail)=details.get(&key) {
+        // Wikidata and local ids are not TMDB/TVmaze ids; never borrow another title's details.
+        let detail=if matches!(provider,"tmdb"|"tvmaze") {details.get(&key)} else {None};
+        if let Some(detail)=detail {
             let movie=result["kind"]=="movie";
             result["genres"]=if movie {json!(detail["genres"].as_array().into_iter().flatten().filter_map(|x|x["name"].as_str()).collect::<Vec<_>>())} else {detail["genres"].clone()};
             result["rating"]=if movie {detail["vote_average"].clone()} else {detail["rating"]["average"].clone()};
@@ -1532,7 +1555,7 @@ async fn metadata_search(
         if token.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error":"Configure your TMDB token to search movies."})),
+                Json(json!({"error":"Add your TMDB token to search movies.","code":"tmdb_key_missing"})),
             );
         }
         (
@@ -1554,6 +1577,10 @@ async fn metadata_search(
         )
     };
     match cached(&app, &key, &url, token.as_deref()).await {
+        Err(e) if e.starts_with("HTTP 401") && token.is_some() => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error":"TMDB rejected the saved token.","code":"tmdb_key_rejected"})),
+        ),
         Err(_) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error":"Metadata search is unavailable. Please try again."})),
@@ -1621,7 +1648,7 @@ async fn manual_match(
         if token.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error":"TMDB token is missing."})),
+                Json(json!({"error":"TMDB token is missing.","code":"tmdb_key_missing"})),
             );
         }
         let detail = match cached(
@@ -1795,7 +1822,7 @@ async fn subtitle_search(
     if key.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error":"Add an OpenSubtitles application API key to search online."})),
+            Json(json!({"error":"Add an OpenSubtitles application API key to search online.","code":"opensubtitles_key_missing"})),
         );
     }
     let title = q.q.trim();
@@ -1843,7 +1870,7 @@ async fn subtitle_search(
             (
                 StatusCode::BAD_GATEWAY,
                 Json(
-                    json!({"error":"OpenSubtitles rejected the API key. Check your application key."}),
+                    json!({"error":"OpenSubtitles rejected the API key. Check your application key.","code":"opensubtitles_key_rejected"}),
                 ),
             )
         }
@@ -1955,7 +1982,7 @@ async fn main() {
         db: dir.join("library.sqlite3"),
         client: Client::builder()
             .timeout(Duration::from_secs(12))
-            .user_agent("SmartMediaScanner/0.1")
+            .user_agent("Platno/0.1 (+https://github.com/WebLJ-si/PlexV2)")
             .build()
             .unwrap(),
         status: Arc::new(Mutex::new(Job::default())),
@@ -1984,6 +2011,8 @@ async fn main() {
         .route("/assets/jetbrains-mono.ttf", get(||async { ([(axum::http::header::CONTENT_TYPE,"font/ttf"),(axum::http::header::CACHE_CONTROL,"public, max-age=604800")],include_bytes!("../static/fonts/jetbrains-mono.ttf").as_slice()) }))
         .route("/assets/icon-192.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-192.png").as_slice()) }))
         .route("/assets/icon-512.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-512.png").as_slice()) }))
+        .route("/assets/title-editor.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/title-editor.js")) }))
+        .route("/assets/setup-guide.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/setup-guide.js")) }))
         .route("/assets/telemetry.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/telemetry.js")) }))
         .route("/api/telemetry/config", get(telemetry::config))
         .route("/api/telemetry/report", post(telemetry::report).layer(axum::extract::DefaultBodyLimit::max(160000)))
@@ -2008,6 +2037,13 @@ async fn main() {
         .route("/api/owner/remote-access", get(remote_access::status).post(remote_access::configure))
         .route("/api/owner/settings", get(auth::server_settings).post(auth::save_server_setting))
         .route("/api/owner/encoders", get(auth::owner_encoders))
+        .route("/api/owner/system", get(setup_guide::system))
+        .route("/api/admin/provider-status", get(setup_guide::providers))
+        .route("/api/admin/check-folder", post(setup_guide::check_folder))
+        .route("/api/admin/title", post(free_metadata::edit_title))
+        .route("/api/admin/episode", post(free_metadata::edit_episode))
+        .route("/api/admin/covers", post(free_metadata::upload_cover).layer(axum::extract::DefaultBodyLimit::max(8_000_000)))
+        .route("/api/covers/{name}", get(free_metadata::cover))
         .route("/api/owner/accounts/credentials", post(auth::update_account_credentials))
         .route("/api/owner/providers", get(provider_status))
         .route("/api/owner/providers/tmdb", post(save_tmdb_key))
@@ -2555,7 +2591,7 @@ mod integration_tests {
         let repeated_path = dir.join("Repeated.mkv").to_string_lossy().to_string();
         c.execute(
             "UPDATE files SET result=?2 WHERE path=?1",
-            params![repeated_path, json!({"kind":"tv","title":"stale title","matcher_version":6}).to_string()],
+            params![repeated_path, json!({"kind":"tv","title":"stale title","matcher_version":7}).to_string()],
         ).unwrap();
         scan(app.clone(), vec![dir.to_string_lossy().to_string()], None, true, true).await;
         assert_ne!(get("Repeated.mkv")["title"], "stale title");
@@ -2581,12 +2617,58 @@ mod integration_tests {
     async fn no_token_does_not_fabricate_movie_match() {
         let (_temp, app) = fixture();
         let p = parse(Path::new("/Movies/Film.2020.mkv"));
-        // Tests do not rely on network; this checks a missing or unusable credential leaves no confirmed match.
+        // An empty free-source answer keeps the tests offline; a missing credential must still not
+        // produce a TMDB match, only a name taken from the file.
+        seed_cache(&app, "wikidata:search:film", json!({"search": []}));
         if std::env::var("TMDB_TOKEN").is_err() {
             let v = identify(&app, &p, vec![]).await;
-            assert_eq!(v["confidence"], 0);
-            assert!(v.get("provider_id").is_none());
+            assert_eq!((v["provider"].as_str(), v["title"].as_str(), v["kind"].as_str()), (Some("local"), Some("Film"), Some("movie")));
+            assert!(v["provider_id"].as_i64().unwrap() > 1_000_000_000_000, "local ids never look like provider ids");
+            assert_eq!(v["confidence"], 55);
+            assert!(v["explanation"].as_str().unwrap().contains("no online match"));
+            assert_eq!(v["year"], "2020");
         }
+    }
+    fn seed_cache(app: &App, key: &str, value: Value) {
+        db(app).execute("INSERT OR REPLACE INTO cache VALUES(?1,?2,?3)", params![key, value.to_string(), Utc::now().timestamp()]).unwrap();
+    }
+    #[tokio::test]
+    async fn movies_match_on_wikidata_without_a_key_and_unmatched_series_keep_their_episodes() {
+        let (_temp, app) = fixture();
+        if std::env::var("TMDB_TOKEN").is_ok() { return; }
+        seed_cache(&app, "wikidata:search:the matrix", json!({"search": [{"id": "Q83495", "label": "The Matrix", "description": "1999 science fiction action film"}]}));
+        seed_cache(&app, "wikidata:entity:Q83495", json!({"entities": {"Q83495": {"labels": {"en": {"value": "The Matrix"}}, "claims": {
+            "P577": [{"mainsnak": {"datavalue": {"value": {"time": "+1999-03-31T00:00:00Z"}}}}],
+            "P2047": [{"mainsnak": {"datavalue": {"value": {"amount": "+136", "unit": "http://www.wikidata.org/entity/Q7727"}}}}],
+            "P136": [{"mainsnak": {"datavalue": {"value": {"id": "Q471839"}}}}], "P345": [{"mainsnak": {"datavalue": {"value": "tt0133093"}}}]}}}}));
+        seed_cache(&app, "wikidata:labels:Q471839", json!({"entities": {"Q471839": {"labels": {"en": {"value": "science fiction film"}}}}}));
+        let movie = identify(&app, &parse(Path::new("/Movies/The.Matrix.1999.1080p.mkv")), vec![]).await;
+        assert_eq!((movie["provider"].as_str(), movie["provider_id"].as_i64(), movie["title"].as_str()), (Some("wikidata"), Some(83495), Some("The Matrix")));
+        assert_eq!((movie["year"].as_str(), movie["runtime"].as_u64(), movie["genres"][0].as_str(), movie["imdb_id"].as_str()), (Some("1999"), Some(136), Some("Science fiction film"), Some("tt0133093")));
+        assert_eq!(movie["confidence"], 72);
+        assert!(movie.get("poster").is_none(), "no invented artwork");
+        seed_cache(&app, "tvmaze:search:demo show", json!([]));
+        let episode = identify(&app, &parse(Path::new("/Media/Demo Show/Season 01/Demo.Show.S01E02.Pilot.mkv")), vec![]).await;
+        assert_eq!((episode["kind"].as_str(), episode["provider"].as_str(), episode["title"].as_str()), (Some("tv"), Some("local"), Some("Demo Show")));
+        assert_eq!((episode["season"].as_u64(), episode["episodes"][0].as_u64(), episode["episode_title"].as_str()), (Some(1), Some(2), Some("Pilot")));
+        let sibling = identify(&app, &parse(Path::new("/Media/Demo Show/Season 02/Demo.Show.S02E01.mkv")), vec![]).await;
+        assert_eq!(sibling["provider_id"], episode["provider_id"], "every episode of one show shares an identity");
+    }
+    #[tokio::test]
+    async fn hand_edits_survive_rescans_and_apply_to_new_episodes() {
+        let (_temp, app) = fixture();
+        if std::env::var("TMDB_TOKEN").is_ok() { return; }
+        seed_cache(&app, "tvmaze:search:demo show", json!([]));
+        let first = identify(&app, &parse(Path::new("/Media/Demo Show/Season 01/Demo.Show.S01E01.mkv")), vec![]).await;
+        let id = first["provider_id"].as_i64().unwrap();
+        let mut edited = first.clone();
+        edited["title"] = json!("My Renamed Show");
+        edited["poster"] = json!("/api/covers/0123456789abcdef0123456789abcdef.png");
+        db(&app).execute("INSERT INTO files(path,root,size,mtime,parsed,result,locked,scanned) VALUES('/Media/Demo Show/Season 01/Demo.Show.S01E01.mkv','/Media',1,0,'{}',?1,1,'now')", [edited.to_string()]).unwrap();
+        let later = identify(&app, &parse(Path::new("/Media/Demo Show/Season 01/Demo.Show.S01E05.mkv")), vec![]).await;
+        assert_eq!(later["provider_id"].as_i64(), Some(id));
+        assert_eq!((later["title"].as_str(), later["poster"].as_str()), (Some("My Renamed Show"), Some("/api/covers/0123456789abcdef0123456789abcdef.png")));
+        assert_eq!(later["episodes"][0], 5, "episode numbers still come from the new file name");
     }
     #[test]
     fn repair_bonus_preserves_manual_locks() {
@@ -2923,6 +3005,9 @@ mod integration_tests {
         }
         assert!(hls::validate_work_dir(&app, media.to_str().unwrap()).is_err());
         assert!(hls::validate_work_dir(&app, media.join("nested").to_str().unwrap()).is_err());
+        let refused = media.join("nested/not-created-yet/deeper");
+        assert!(hls::validate_work_dir(&app, refused.to_str().unwrap()).is_err());
+        assert!(!media.join("nested/not-created-yet").exists(), "a refused folder must not be created");
         let ok = hls::validate_work_dir(&app, temp.path().join("scratch/deeper").to_str().unwrap()).unwrap();
         assert!(ok.is_dir() && std::fs::read_dir(&ok).unwrap().count() == 0, "write probe must be removed");
     }

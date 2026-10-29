@@ -16,6 +16,8 @@ Open **http://127.0.0.1:8787**. Choose **Scan & settings**, click **Browse folde
 
 On first launch, create the server owner account with an email address in the browser; all accounts sign in by email. Passwords are stored as salted PBKDF2 hashes; sessions use random opaque cookies whose hashes are stored in SQLite. The owner can create administrators and users, and can change any account’s email or password from the activity page. Administrators can create users and view activity, while only the owner can choose critical server settings. Each account can add profiles, with playback history and playback preferences saved separately for each profile. Existing watch progress is assigned to the owner’s initial Default profile during setup. Do not expose the service to the internet without HTTPS and a trusted reverse proxy. For LAN or Docker deployment, bind with `SMART_MEDIA_HOST=0.0.0.0`; set `SMART_MEDIA_COOKIE_SECURE=1` when HTTPS terminates at a reverse proxy. Docker and HTTPS deployment examples are in [docs/deployment.md](docs/deployment.md). If the owner forgets the password, stop the service and run `./target/release/smart-media-scanner reset-owner-password` in a macOS/Linux terminal; it prompts for the replacement owner email and password without echoing the password. Set `SMART_MEDIA_DATA` the same way as the server if it uses a custom data directory. The command signs out existing owner sessions.
 
+After creating the owner account, an animated first-run guide walks through media folders, conversion folder, memory and graphics (encoder, quality, simultaneous conversions), the first scan, accounts, the optional TMDB and OpenSubtitles keys, and remote access. Every step can be skipped; skipping a key step lists exactly which features are lost, and using such a feature later shows precise instructions for adding the key. Re-run it from Settings → Setup guide.
+
 ### Movie metadata
 
 Create a [TMDB account and API credentials](https://developer.themoviedb.org/docs/getting-started), then copy your API **Read Access Token** (not the v3 API key). Set it before launching, without committing it or putting it in source files:
@@ -80,13 +82,13 @@ This is a first implementation, not the full specification in the original brief
 - **Stats** shows stream details. Settings includes tool/path health, library size, largest files, files needing attention and account-session revocation. The former playback-report UI and API have been removed; future maintainer issue handling and automatic subtitle matching/synchronization are tracked in [TODO.md](TODO.md).
 - Install the PWA from a supported browser over HTTPS or localhost. Its worker caches only the public offline page/icons/manifest, never authenticated HTML, APIs, artwork, or video. This provides an offline connection notice, not offline media playback.
 
-HLS sessions use random identifiers, belong to their creating profile, and are limited to four concurrent sessions globally. This cap does not cover legacy progressive responses; there is no per-account quota or queue yet. See [the complete review of all 163 proposal entries](docs/feature-review.md) for implemented, partial, existing, and deferred work. In particular parental controls, PGS/VobSub burn-in, external integrations, and native TV clients remain separate work.
+HLS sessions use random identifiers, belong to their creating profile, and share a global conversion limit (four by default; the owner can set 1–8 in the first-run guide or Settings) with progressive conversions; there is no per-account quota or queue yet. See [the complete review of all 163 proposal entries](docs/feature-review.md) for implemented, partial, existing, and deferred work. In particular parental controls, PGS/VobSub burn-in, external integrations, and native TV clients remain separate work.
 
 ## Documentation
 
 Open **Help & documentation** in the application, or browse `/help`. The bundled Slovenian guide covers setup, accounts, libraries, scanning, playback, subtitles, PWA, diagnostics and troubleshooting.
 
-- [User guide (Slovenian)](docs/user-guide.sl.md)
+- [User guide](docs/user-guide.md)
 - [Development and architecture](docs/development.md)
 - [HTTP API reference](docs/api.md)
 - [Testing and coverage matrix](docs/testing.md)
