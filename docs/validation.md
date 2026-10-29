@@ -31,8 +31,14 @@ The local Docker daemon was unavailable. Compose syntax was checked, but the Lin
 
 No live process on the user's existing port was stopped or replaced during testing. Restart the existing server with the newly built executable to load the compiled-in HTML and routes. This avoids interrupting an unknown existing scan or playback session.
 
-Manual skip markers, chapter navigation and local playback reports have been removed at user request. Their former routes return 404, fresh databases no longer create their tables, and no UI references remain. Audio selection remains available only for multi-track media. The future subtitle synchronization and maintainer issue workflows are recorded in [TODO.md](../TODO.md).
+Manual skip markers, chapter navigation and local playback reports have been removed at user request. Their former routes return 404, fresh databases no longer create their tables, and no UI references remain. Audio selection remains available only for multi-track media. Local speech-based text-subtitle alignment is implemented; exact-release discovery, translated-subtitle alignment and maintainer issue work remain in [TODO.md](../TODO.md).
 
 See [feature-review.md](feature-review.md) for an explicit status for every proposal, including deferred larger modules and partial implementations. No claims are made for parental restrictions, native clients, social synchronization, offline videos, or absent provider integrations.
 
 The reliability review also exercised simulated SQLite failures and rollback, concurrent failed-login counters, locked identification during scanning, cancellation and reaping of child processes, bounded process output, bounded scan error history, preview cache eviction, stale authentication cleanup and reconnection of a media path. This was a short automated run, not a multi-day soak, production load test or fault injection against a real network filesystem.
+
+## Speech and compatibility validation — 2026-10-29
+
+The complete `scripts/test.py --browser --speech` run passed: 58 Rust tests, strict Clippy, 27 Node control tests, syntax/help checks, the existing HTTP/API/Chrome suite and real Whisper inference. New fixtures exercise decoded HLS and progressive output for MPEG-4/PCM AVI, FLV/MP3, VP9/Opus WebM, 10-bit H.264 MP4, and odd-dimension silent FFV1. The speech fixture verifies offset recovery, at least three matching anchors, preserved subtitle bytes, signature-based cache reuse/invalidation and subtitle allowlist rejection. A separate real Chrome run verifies automatic sync changes actual cue timestamps, undo restores them, cancellation preserves timing, and compatibility/mobile controls work.
+
+Long-video rate correction is covered by synthetic anchor tests; a real long-video drift corpus, translated dialogue, all languages, damaged/DRM files, Docker speech-engine installation and physical/native devices were not tested. Passing these fixtures does not establish universal codec support.

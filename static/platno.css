@@ -65,3 +65,5 @@ dialog.player-dialog{max-width:1600px;width:96vw;border-radius:20px;padding:0;ba
 /* Keep the blurred featured background square and its sharp poster rounded. */
 .overview-hero{border-radius:0}
 .overview-hero .feature-poster .poster{border-radius:14px}
+.subtitle-sync-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}.subtitle-sync-controls button{min-height:34px;padding:6px 12px;background:#17171ed9;color:#f4f4f5;border:1px solid #ffffff30;font-size:11px}.subtitle-sync-controls span{font:10px/1.5 var(--mono);color:#d4d4d8;flex:1;min-width:160px}.subtitle-sync-controls button:disabled{opacity:.5}
+@media(max-width:760px){.subtitle-sync-controls{gap:6px}.subtitle-sync-controls span{flex-basis:100%;font-size:9px}.player-action-row{max-height:29dvh}}

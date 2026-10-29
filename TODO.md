@@ -5,13 +5,14 @@ This is planned work, not a list of available features. Update the user guide an
 ## Automatic subtitle matching and synchronization
 
 - [ ] Match subtitles to the exact release using file hash, language, episode identity, frame rate and duration instead of title alone.
-- [ ] Detect whether subtitles are out of sync; estimate both constant offset and time drift.
-- [ ] Offer automatic correction using a verified local tool such as ffsubsync or alass, behind an explicit user action.
-- [ ] Show confidence, proposed offset/drift and a preview before applying; provide undo and preserve the original subtitle.
-- [ ] Run synchronization as a bounded background job with cancellation and clear progress/errors. Do not silently install tools/models or overwrite media folders.
-- [ ] Test correct files, positive/negative delay, frame-rate drift, wrong release, missing audio, long/short videos, Unicode paths and unavailable drives.
+- [x] Estimate constant offset and, when independent distant speech samples agree, time drift using local Whisper transcription and subtitle-text matching.
+- [x] Offer automatic correction with profile opt-out, manual retry, cancellation, match evidence and session-local undo; preserve originals.
+- [x] Bound local inference and cache only timing parameters per profile and source signature.
+- [x] Test offset/drift estimation, ambiguous dialogue, Unicode normalization, source preservation, cache invalidation, actual speech inference, subtitle allowlists, and seek-time correction.
+- [ ] Add reliable alignment for translated subtitles using an independently verified non-text speech alignment method.
+- [ ] Add end-to-end real speech tests for long-video drift, changing edits, additional languages, physical devices and disconnected network drives.
 
-Requested 2026-10-29. Manual subtitle delay remains available in the player; automatic synchronization is not implemented.
+Implemented 2026-10-29 for same-language text matching. Manual delay remains available. Exact-release discovery and translated-subtitle alignment remain separate work.
 
 ## Open-source issue and support workflow
 

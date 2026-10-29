@@ -45,6 +45,7 @@ pub struct Start {
     start: Option<f64>,
     quality: Option<String>,
     audio: Option<u32>,
+    compatible: Option<bool>,
 }
 #[derive(Deserialize)]
 pub struct Stop {
@@ -113,9 +114,14 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     }
     let mut directory=StreamingDir(Some(dir.clone()));
     let hdr=match playback::hdr_filter(&path).await {Ok(v)=>v,Err(e)=>{let _=tokio::fs::remove_dir_all(&dir).await;return error(StatusCode::BAD_GATEWAY,&e)}};
-    let (encoder,_available)=playback::h264_encoder(&app).await;
+    let (mut encoder,_available)=playback::h264_encoder(&app).await;
+    if input.compatible.unwrap_or(false){encoder="libx264".into();}
     let mut command = Command::new(playback::binary("ffmpeg"));
-    command.args(["-v","error","-nostdin","-re","-ss",&format!("{start:.3}"),"-i"]).arg(&path);
+    playback::conversion_input_options(&mut command,input.compatible.unwrap_or(false));
+    command.args(["-v","error","-nostdin","-re"]);
+    if start>0. && !input.compatible.unwrap_or(false){command.args(["-ss",&format!("{start:.3}")]);}
+    command.arg("-i").arg(&path);
+    if start>0. && input.compatible.unwrap_or(false){command.args(["-ss",&format!("{start:.3}")]);}
     let adaptive=quality=="auto";
     let mut master=String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
     for tier in tiers {
@@ -127,7 +133,7 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
             .args(playback::encoder_options(&encoder))
             .args(["-pix_fmt","yuv420p","-vf",&scale,"-b:v",&rate,"-maxrate",&rate,"-bufsize","12000k",
                    "-force_key_frames","expr:gte(t,n_forced*2)","-sc_threshold","0",
-                   "-c:a","aac","-ac","2","-b:a","160k","-f","hls","-hls_time","2","-hls_list_size","10",
+                   "-c:a","aac","-ac","2","-ar","48000","-af","aresample=async=1:first_pts=0","-b:a","160k","-sn","-dn","-max_muxing_queue_size","2048","-f","hls","-hls_time","2","-hls_list_size","10",
                    "-hls_delete_threshold","3","-hls_flags","delete_segments+temp_file+independent_segments","-hls_segment_filename"])
             .arg(dir.join(format!("{prefix}segment%06d.ts"))).arg(dir.join(&playlist));
         let bandwidth=rate.trim_end_matches('k').parse::<u32>().unwrap_or(6000)*1200+192_000;

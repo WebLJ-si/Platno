@@ -23,7 +23,9 @@ PlexV2 is one Rust executable with an embedded browser UI. There is no separate 
 | `scripts/integration.py` | Disposable real-media/server/database test harness |
 | `scripts/browser.cjs` | Real Chrome UI regressions, used by the isolated harness |
 | `scripts/test.py` | One command to build and run the full local validation pipeline |
-| `TODO.md` | Explicit future work, including subtitle synchronization and maintainer issue workflow |
+| `src/subtitle_sync.rs` | Bounded local speech alignment, profile-owned cancellation and signature-keyed timing cache |
+| `scripts/setup-subtitle-sync.py` | Explicit, SHA-256 verified Whisper model setup |
+| `TODO.md` | Future release matching, translated-subtitle alignment and maintainer issue workflow |
 
 ## Data and request flow
 
@@ -43,7 +45,7 @@ Embedded text subtitles are converted to WebVTT. Local sidecars are selected fro
 
 The player audio selector starts hidden and becomes visible only for two or more embedded audio tracks. Chapter navigation, manual/automatic skip-marker UI, and local playback reports were removed on 2026-10-29. Their routes and new-table initialization were removed too. Old databases can retain dormant `playback_markers` or `playback_reports` tables; startup deliberately does not destroy historical user data. No remaining application feature reads or writes them.
 
-Do not reintroduce local reports as a substitute for an open-source maintainer issue workflow. `TODO.md` records requirements for a future opt-in, sanitized workflow and automatic subtitle release matching/offset/drift correction. Neither is implemented.
+Do not reintroduce local reports as a substitute for an open-source maintainer issue workflow. `TODO.md` records requirements for a future opt-in, sanitized issue workflow and exact-release subtitle discovery. Local speech-based offset/drift correction is implemented in `subtitle_sync.rs`; translated-subtitle alignment remains separate work.
 
 ## Environment
 
@@ -107,3 +109,11 @@ At 760px and below, the sidebar becomes a bottom tab bar, and Libraries opens a 
 Validate with `node scripts/check-js.cjs`, the existing JavaScript/Rust suites, and `NODE_PATH=<path-to-playwright-node_modules> python3 scripts/integration.py --browser`. The browser suite covers the mobile library menu and horizontal overflow at 320, 390, 768, 1024, and 1920px as well as playback, filters, settings, offline mode, and authentication.
 
 Artwork ambiance: `applyArtworkGlow()` samples a 16×16 anonymous-CORS image in a browser canvas and applies an alpha-weighted average RGB value to `--artwork-color` on the current detail/featured container. A bounded 64-entry promise cache avoids repeated sampling. Unsupported CORS/canvas reads resolve without interrupting artwork display; a low-opacity blurred artwork layer provides a visual fallback. Image callbacks verify the element is still connected and its source is unchanged before applying color. Featured cards combine a blurred cover background with a separate sharp 2:3 poster using `object-fit: contain`; the poster stacks above the copy on phones.
+
+## Local speech synchronization and recovery conversion
+
+`subtitle_sync.rs` validates the library path, subtitle ID and selected audio stream, then decodes one or two 75-second mono 16 kHz WAV samples. A local [whisper.cpp CLI](https://github.com/ggml-org/whisper.cpp/tree/master/examples/cli) supplies timestamped text. Unicode-normalized phrase matches must be distinct, unambiguous, and consistent before a robust offset/rate fit is accepted. It requires three agreeing anchors and a match score of at least 0.72; this score is a heuristic, not a probability. A rate fit requires anchors separated by at least five minutes. The cache is bounded to 256 timing-only entries keyed by profile, media/subtitle signatures, audio selection and model signature. Temporary samples/transcripts use a private temporary directory.
+
+There is one active inference slot; cancellation checks both the profile and client-generated request ID. Child process runtime and output are bounded using `processes::output`; cancellation drops the running future and schedules child termination/reaping. The player retains original cue times, applies offset/rate independently per selected subtitle track, accounts for converted-stream seek offsets and keeps manual delay additive. It reloads subtitle cues around the inverse corrected seek position. Undo suppresses automatic reapplication in the current playback; the profile preference opts out across playback sessions.
+
+FFmpeg input probing/timestamp recovery and stereo AAC output are shared across conversion paths. H.264 10-bit or non-4:2:0 video is not advertised as directly playable. Compatibility mode uses libx264 and output-side seeking, avoiding broken input indexes (including FLV files that emit no frames with input-side `-ss 0`). The player awaits old HLS-session cleanup before starting a replacement, retaining correct behavior at the four-slot conversion limit. See the [FFmpeg codec documentation](https://ffmpeg.org/ffmpeg-codecs.html) for decoder error-handling limits.

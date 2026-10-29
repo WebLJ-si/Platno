@@ -77,4 +77,14 @@ Owner-only endpoints are `/api/owner/settings` (GET/POST), `/api/owner/encoders`
 
 ## Removed endpoints
 
-`/api/playback/markers`, `/api/admin/playback/markers`, `/api/playback/report` and `/api/admin/playback/reports` no longer exist and return 404. There is no automatic subtitle-sync endpoint. Future matching/synchronization and maintainer issue handling are recorded in `TODO.md`.
+`/api/playback/markers`, `/api/admin/playback/markers`, `/api/playback/report` and `/api/admin/playback/reports` no longer exist and return 404. Audio-based text-subtitle synchronization is available below. Exact-release subtitle discovery and maintainer issue handling remain in `TODO.md`.
+
+## Local speech alignment
+
+- `GET /api/playback/info`: `subtitle_sync.available` reports whether a local whisper-cli/model is detected.
+- `POST /api/playback/subtitle-sync`: authenticated body `{request_id, path, subtitle, audio?, position?, refresh?}`. The request ID is 1–64 ASCII letters/digits/hyphens. Paths must be in the catalogue; subtitle IDs and audio ordinals are validated against local tracks. Runs at most one speech job globally, with finite subprocess time/output limits. Returns `{alignment:{offset,scale,confidence,anchors,samples},cached,local:true}`; media time equals subtitle time × scale + offset. Confidence is a match heuristic, not a probability. Rejects insufficient/inconsistent matches with 422 and occupied slots with 429. Source files remain unchanged.
+- `POST /api/playback/subtitle-sync/cancel`: body `{request_id}`. Cancels only the matching active job owned by the current profile; returns `{cancelled}`.
+- Profile setting `subtitle_auto_sync` accepts `true`/`false`, default true when the runtime is available. Undo is session-local; disabling the preference stops automatic reapplication on later playback.
+- HLS start bodies and progressive conversion queries accept `compatible: true`. This forces software encoding and uses output-side seeking; auto HLS is requested as fixed 720p by the player in this mode.
+
+Speech samples/transcripts are private temporary files. The cache contains only timing parameters, keyed by the profile and signatures of the source media, subtitle, audio selection, and speech model. Manual refresh recomputes an existing result.

@@ -21,6 +21,4 @@ tokio-util = { version = "0.7", features = ["io"] }
 async-stream = "0.3"
 futures-util = "0.3"
 ring = "0.17"
-
-[dev-dependencies]
 tempfile = "3"

@@ -129,3 +129,15 @@ test('season watched/reset actions only change files in that season',()=>{
  h.context.markDetailSeason('reset',1);assert.deepEqual(calls[1],{paths:['s1e1','s1e2'],action:'reset'});
  h.context.markDetailSeason('watched',99);h.elements['#detail-season'].value='';h.context.markDetail('watched',true);assert.equal(calls.length,2,'empty and absent seasons cannot change a different season');
 });
+
+test('speech alignment keeps absolute timing across converted seeks and manual delay',()=>{
+ const h=setup(['applySubtitleDelay']);vm.runInContext('const subtitleCueTimes=new WeakMap()',h.context);
+ const cue={startTime:20,endTime:22},track={syncId:'file:0',syncBase:80,cues:[cue]};h.video.textTracks=[track];h.setState({mode:'transcode',offset:100,subtitleDelay:.5,subtitleAlignments:{'file:0':{scale:1.025,offset:4}}});
+ h.context.applySubtitleDelay();assert(Math.abs(cue.startTime-7)<.001);assert(Math.abs(cue.endTime-9.05)<.001);
+ h.context.applySubtitleDelay();assert(Math.abs(cue.startTime-7)<.001,'repeated updates cannot accumulate drift');
+ h.state().subtitleAlignments={};h.context.applySubtitleDelay();assert.equal(cue.startTime,.5,'undo restores original source coordinates plus manual delay');
+});
+test('speech corrections are isolated to each selected subtitle track',()=>{
+ const h=setup(['applySubtitleDelay']);vm.runInContext('const subtitleCueTimes=new WeakMap()',h.context);
+ const first={startTime:10,endTime:12},second={startTime:20,endTime:22};h.video.textTracks=[{syncId:'a',cues:[first]},{syncId:'b',cues:[second]}];h.setState({mode:'direct',subtitleAlignments:{a:{scale:1,offset:3}}});h.context.applySubtitleDelay();assert.equal(first.startTime,13);assert.equal(second.startTime,20);
+});

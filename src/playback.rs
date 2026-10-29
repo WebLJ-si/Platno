@@ -27,6 +27,7 @@ pub struct MediaQuery {
     quality: Option<String>,
     subtitle: Option<String>,
     audio: Option<u32>,
+    compatible: Option<bool>,
 }
 
 pub(crate) fn library_path(app: &App, path: &str) -> Option<PathBuf> {
@@ -104,7 +105,7 @@ pub fn encoder_options(encoder: &str) -> Vec<String> {
 }
 const DRIVE_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(180);
-async fn probe_file(path: &std::path::Path) -> Result<Value, String> {
+pub(crate) async fn probe_file(path: &std::path::Path) -> Result<Value, String> {
     probe_file_with(path, &binary("ffprobe")).await
 }
 async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value, String> {
@@ -136,7 +137,7 @@ async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value,
                 "-v",
                 "error",
                 "-show_entries",
-                "format=duration,format_name,bit_rate:stream=index,codec_type,codec_name,channels,channel_layout,width,height,color_transfer:stream_tags=language,title",
+                "format=duration,format_name,bit_rate:stream=index,codec_type,codec_name,pix_fmt,channels,channel_layout,width,height,color_transfer:stream_tags=language,title",
                 "-of",
                 "json",
             ])
@@ -166,7 +167,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
             )),
             _ => None,
         };
-    let cache_key = signature.as_ref().map(|_| format!("playback:probe:v4:{}", q.path));
+    let cache_key = signature.as_ref().map(|_| format!("playback:probe:v5:{}", q.path));
     let cached_data = cache_key
         .as_ref()
         .and_then(|key| {
@@ -206,7 +207,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
             let format = data["format"]["format_name"].as_str().unwrap_or("");
             let hdr = video.is_some_and(|x|matches!(x["color_transfer"].as_str(),Some("smpte2084"|"arib-std-b67")));
             let direct = !hdr && format.split(',').any(|s| s == "mp4" || s == "mov")
-                && video.is_some_and(|x| x["codec_name"] == "h264")
+                && video.is_some_and(|x| x["codec_name"] == "h264" && matches!(x["pix_fmt"].as_str(),Some("yuv420p"|"yuvj420p")))
                 && audio.is_none_or(|x| x["codec_name"] == "aac");
             let duration = data["format"]["duration"]
                 .as_str()
@@ -233,7 +234,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                     subtitles.push(json!({"id":format!("file:{i}"),"label":name}));
                 }
             }
-            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"hdr":hdr,"bit_rate":data["format"]["bit_rate"]})).into_response()
+            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"hdr":hdr,"bit_rate":data["format"]["bit_rate"],"subtitle_sync":crate::subtitle_sync::status(&app)})).into_response()
         }
     }
 }
@@ -332,6 +333,7 @@ pub(crate) async fn audio_map(path: &std::path::Path, audio: Option<u32>) -> Res
     if index as usize >= count { return Err("This audio track is unavailable".into()); }
     Ok(format!("0:a:{index}"))
 }
+pub(crate) fn conversion_input_options(command:&mut Command,compatible:bool){command.args(["-fflags",if compatible{"+genpts+discardcorrupt"}else{"+genpts"},"-analyzeduration","20000000","-probesize","20000000"]);if compatible{command.args(["-err_detect","ignore_err"]);}}
 pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> Response {
     let Some(path) = library_path(&app, &q.path) else {
         return fail(StatusCode::NOT_FOUND, "File is not in the library");
@@ -350,18 +352,15 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
     let hdr=match hdr_filter(&path).await {Ok(v)=>v,Err(e)=>return fail(StatusCode::BAD_GATEWAY,&e)};
     let scale=format!("{hdr}scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
     let audio_map = match audio_map(&path, q.audio).await { Ok(v)=>v, Err(e)=>return fail(StatusCode::BAD_REQUEST,&e) };
-    let (encoder,_available)=h264_encoder(&app).await;
+    let (mut encoder,_available)=h264_encoder(&app).await;
+    if q.compatible.unwrap_or(false){encoder="libx264".into();}
     let mut cmd = Command::new(binary("ffmpeg"));
+    conversion_input_options(&mut cmd,q.compatible.unwrap_or(false));
+    cmd.args(["-v","error","-nostdin"]);
+    if start>0. && !q.compatible.unwrap_or(false){cmd.args(["-ss",&format!("{start:.3}")]);}
+    cmd.arg("-i").arg(path);
+    if start>0. && q.compatible.unwrap_or(false){cmd.args(["-ss",&format!("{start:.3}")]);}
     cmd.args([
-        "-v",
-        "error",
-        "-nostdin",
-        "-ss",
-        &format!("{start:.3}"),
-        "-i",
-    ])
-    .arg(path)
-    .args([
         "-map",
         "0:v:0",
         "-map",
@@ -383,8 +382,18 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
         "24",
         "-c:a",
         "aac",
+        "-ac",
+        "2",
+        "-ar",
+        "48000",
+        "-af",
+        "aresample=async=1:first_pts=0",
         "-b:a",
         "160k",
+        "-sn",
+        "-dn",
+        "-max_muxing_queue_size",
+        "2048",
         "-movflags",
         "frag_keyframe+empty_moov+default_base_moof",
         "-f",
@@ -416,7 +425,7 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
     response
 }
 
-fn local_subtitles(app: &App, path: &str) -> Vec<String> {
+pub(crate) fn local_subtitles(app: &App, path: &str) -> Vec<String> {
     let raw: String = db(app)
         .query_row("SELECT result FROM files WHERE path=?1", [path], |r| {
             r.get(0)
@@ -432,7 +441,7 @@ fn local_subtitles(app: &App, path: &str) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
-fn is_text_subtitle(name: &str) -> bool {
+pub(crate) fn is_text_subtitle(name: &str) -> bool {
     PathBuf::from(name)
         .extension()
         .and_then(|e| e.to_str())

@@ -4,7 +4,7 @@ Pregled izvornega dokumenta z dne 29. 10. 2026. Dokument je seznam idej; njegove
 
 Funkcije smo preverjali z Rust testi, izoliranim HTTP/FFmpeg okoljem in Chrome UI preizkusom. Za dejanske omejitve testiranja glej `validation.md`.
 
-Posodobitev 29. 10. 2026: po zahtevi uporabnika so ročni skip markerji, navigacija po poglavjih in lokalne prijave težav odstranjeni. Izbira zvoka ostaja vidna samo pri več sledih. Samodejno ujemanje/sinhronizacija podnapisov in prihodnji maintainer issue workflow sta v `TODO.md`.
+Posodobitev 29. 10. 2026: po zahtevi uporabnika so ročni skip markerji, navigacija po poglavjih in lokalne prijave težav odstranjeni. Izbira zvoka ostaja vidna samo pri več sledih. Lokalna sinhronizacija besedilnih podnapisov z govorom je uvedena; exact-release ujemanje, prevedeni podnapisi in maintainer issue workflow ostajajo v `TODO.md`.
 
 ## Najprej: 12 funkcij z največjim učinkom
 
@@ -105,7 +105,7 @@ Posodobitev 29. 10. 2026: po zahtevi uporabnika so ročni skip markerji, navigac
 | Samodejni prenos manjkajočih podnapisov v želenem jeziku | Odloženo | Potrebuje podprt provider API, preverjanje ujemanja in potrjeno zapisovalno politiko medijskih map. |
 | Podpora za Podnapisi.net (priročno za slovenske podnapise) | Odloženo | Potrebuje podprt provider API, preverjanje ujemanja in potrjeno zapisovalno politiko medijskih map. |
 | Ocena ujemanja podnapisov glede na hash datoteke | Odloženo | Potrebuje podprt provider API, preverjanje ujemanja in potrjeno zapisovalno politiko medijskih map. |
-| Samodejna sinhronizacija podnapisov (npr. ffsubsync ali alass) | Odloženo | Zapisano v TODO.md z release matchingom, oceno zamika/drifta, predogledom in undo. ffsubsync/alass nista del trenutnega runtime; potrebna sta čakalna vrsta in meritev ujemanja brez spreminjanja izvirnikov. |
+| Samodejna sinhronizacija podnapisov (npr. ffsubsync ali alass) | Delno uvedeno | Lokalni Whisper primerja časovno označeni govor z besedilom podnapisov, oceni zamik/drift ob dovolj ujemanjih, podpira preklic, ponovno meritev in undo. Izvirniki ostanejo nespremenjeni; prevedeni podnapisi in ujemanje točne izdaje ostajajo ločeno delo. |
 | Pretvorba SRT/ASS/SSA v WebVTT z ohranjenim stilom | Delno obstoječe | FFmpeg pretvori besedilo v WebVTT; ASS napredni slog/animacije se ne ohranijo v celoti. |
 | Podpora za ASS animacije (npr. JASSUB) za anime | Odloženo | Nov adapter, identitete, cache, naročnine in pravila razreševanja nasprotujočih se rezultatov so samostojen razvojni sklop. |
 | Ročno nalaganje podnapisov med predvajanjem | Odloženo | Potrebuje omejen upload, validacijo, profilne pravice in ločen storage. |

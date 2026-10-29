@@ -259,10 +259,12 @@ Okno pokaže pot izbrane datoteke in obrazec za izbiro pravilnih metapodatkov. G
 - **Audio track**: izbira vgrajene zvočne sledi; prikaže se samo, če sta na voljo vsaj dve sledi. Sledi lahko vključujejo jezik, kodek, število kanalov in naslov. Sprememba lahko ponovno zažene pretvorbo pri trenutnem položaju.
 - **Subtitles**: izklop ali izbira glavne besedilne podnapisne sledi.
 - **Second subtitles**: izklop ali izbira druge podnapisne sledi; izbirnik se prikaže, kadar sta na voljo vsaj dve sledi.
-- **Subtitle delay**: ročni zamik podnapisov v sekundah, od −30 do +30.
+- **Subtitle delay**: ročni zamik podnapisov v sekundah, od −30 do +30, prištet k govorni sinhronizaciji.
+- **Sync subtitles**: iz kratkih lokalnih zvočnih vzorcev ponovno uskladi izbrane besedilne sledi. **Cancel sync** prekine lastno opravilo; **Undo sync** obnovi prvotne časovne oznake za trenutno predvajanje.
+- **Automatically sync subtitles with local speech recognition**: nastavitev profila za samodejno usklajevanje po izbiri podnapisa; zahteva lokalni Whisper in model.
 - **Quality**: **Auto**, **1080p**, **720p** ali **480p**.
 - **Playback speed**: **0.5×**, **0.75×**, **1×**, **1.25×**, **1.5×** ali **2×**.
-- **Convert**: ročno preklopi neposredno predvajanje na združljivo pretvorbo, kadar je možnost prikazana.
+- **Compatibility mode**: ponovno zažene predvajanje s programsko H.264/AAC pretvorbo in robustnim iskanjem; Auto uporabi 720p.
 - **Stats**: pokaže oziroma skrije podatke o načinu predvajanja, razlogu za pretvorbo, kakovosti, kodekih, zvoku, izvirnem bitrateu, HDR, HLS, ocenjeni pasovni širini in medpomnilniku, kadar so podatki na voljo.
 - **PiP**: poskusi vklopiti oziroma izklopiti sliko v sliki; ob nepodprtem načinu se prikaže sporočilo.
 - **Fullscreen**: vklopi oziroma izklopi celozaslonski način.

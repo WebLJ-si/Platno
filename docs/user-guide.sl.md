@@ -86,7 +86,7 @@ Play odpre predvajalnik. Združljivi H.264/AAC MP4 se pošiljajo neposredno z HT
 
 Auto pri pretvorbi HLS pripravi različice 480p, 720p in 1080p; predvajalnik izbira kakovost glede na razmere. Tri različice hkrati porabijo več procesorja. Na šibkem strežniku izberite fiksno kakovost 480p ali 720p. Pretvorba ne ustvari podrobnosti, ki jih ni v izvirniku.
 
-Če neposredno predvajanje odpove, predvajalnik poskusi združljivo pretvorbo. Convert jo lahko sproži tudi ročno, ko je možnost vidna. Dolgo nalaganje je lahko posledica odklopljenega diska, omrežne mape ali počasne pretvorbe; počakajte na sporočilo in uporabite Try again.
+Če neposredno predvajanje odpove, predvajalnik poskusi združljivo pretvorbo. Compatibility mode ročno vključi programsko pretvorbo H.264/AAC pri trenutnem položaju. Pri Auto uporabi fiksno 720p in ob slabem indeksu datoteko dekodira od začetka do izbranega časa. To lahko traja dlje, vendar obide nedelujoče hitro iskanje. FFmpeg mora podpirati vhodni kodek; šifriranih ali nepopravljivo poškodovanih datotek ni mogoče zagotovljeno predvajati. Dolgo nalaganje je lahko posledica odklopljenega diska, omrežne mape ali počasne pretvorbe; počakajte na sporočilo in uporabite Try again.
 
 HLS in progresivna pretvorba si delita največ štiri sočasna mesta na strežniku. Sporočilo o zasedenih mestih pomeni, da zaprite neuporabljeno predvajanje oziroma poskusite pozneje. To ni čakalna vrsta ali omejitev po računu.
 
@@ -169,3 +169,11 @@ Po spremembah HTML/JS je potrebna nova Rust gradnja, ker je spletni vmesnik vgra
 Pred varnostno kopijo ustavite strežnik in kopirajte celoten podatkovni imenik, skupaj z zasebnimi provider datotekami. Med živim SQLite WAL delovanjem ne kopirajte samo library.sqlite3. Kopije vsebujejo zasebne podatke; hranite jih z ustreznimi dovoljenji.
 
 Ne brišite podatkovnega imenika kot običajen korak odpravljanja težav: s tem izgubite račune, ročne identifikacije in zgodovino. Za obnovitev uporabite preverjeno kopijo z ustavljenim strežnikom.
+
+## Samodejna sinhronizacija podnapisov z govorom
+
+Strežnik lahko iz kratkih zvočnih vzorcev lokalno ustvari prepis s časovnimi oznakami in ga primerja z izbranimi besedilnimi podnapisi. Potrebuje whisper-cli in model ggml-base.bin. Na macOS namestite orodje z brew install whisper-cpp ter zaženite python3 scripts/setup-subtitle-sync.py. Pri lastnem podatkovnem imeniku dodajte --data-dir ali nastavite SMART_MEDIA_WHISPER_MODEL; SMART_MEDIA_WHISPER določi pot do orodja. Model se prenese samo pri izrecnem zagonu namestitvene skripte, s preverjanjem SHA-256.
+
+Automatic subtitle sync v nastavitvah profila je privzeto vključen, kadar je lokalni pogon nameščen. Ob izbiri podnapisov analizira največ dva 75-sekundna vzorca. Najmanj trije različni ujemajoči se odlomki govora določijo zamik; pri daljšem videu lahko drugi vzorec oceni tudi postopno časovno drsenje. Slabo ujemanje, prevedeni podnapisi ali druga montaža lahko preprečijo zanesljivo korekcijo; dotedanje časovne nastavitve ostanejo.
+
+Sync subtitles ponovno poskusi uskladitev. Cancel sync prekine opravilo trenutnega profila. Undo sync obnovi prvotne časovne oznake med trenutnim predvajanjem. Ročni Subtitle delay se prišteje k uskladitvi. Nastavitev je ločena za obe prikazani podnapisni sledi in sledi preskokom v videu. Izvirne datoteke se ne prepišejo. Vzorci in prepisi ostanejo na strežniku v začasnem imeniku; predpomnjena je samo ugotovljena časovna korekcija, ločeno po profilu, videu, podnapisu, zvoku in modelu.

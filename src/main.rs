@@ -5,6 +5,7 @@ mod media_features;
 mod parser;
 mod playback;
 mod processes;
+mod subtitle_sync;
 use axum::{
     extract::{Path as AxPath, Query, State},
     http::{HeaderMap, StatusCode},
@@ -282,6 +283,7 @@ fn videos(path: &Path) -> bool {
         .to_lowercase();
     [
         "mkv", "mp4", "avi", "mov", "m4v", "wmv", "ts", "m2ts", "webm", "mpg", "mpeg",
+        "flv", "f4v", "ogv", "ogg", "vob", "mts", "mxf", "3gp", "3g2", "asf", "divx", "rm", "rmvb", "m2v", "mpe", "m2t",
     ]
     .contains(&ext.as_str())
 }
@@ -2015,6 +2017,8 @@ async fn main() {
         .route("/api/playback/hls/{id}/{file}", get(hls::file))
         .route("/api/playback/file", get(playback::direct))
         .route("/api/playback/subtitle", get(playback::subtitle))
+        .route("/api/playback/subtitle-sync", post(subtitle_sync::sync))
+        .route("/api/playback/subtitle-sync/cancel", post(subtitle_sync::cancel))
         .route("/api/playback/transcode", get(playback::transcode))
         .route_layer(middleware::from_fn_with_state(auth_db, auth::guard))
         .with_state(app.clone());
