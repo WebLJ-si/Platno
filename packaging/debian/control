@@ -1,0 +1,13 @@
+Package: platno
+Version: {version}
+Section: video
+Priority: optional
+Architecture: {arch}
+Depends: ffmpeg, ca-certificates
+Installed-Size: {size}
+Maintainer: Platno maintainers <noreply@users.noreply.github.com>
+Homepage: https://github.com/WebLJ-si/Platno
+Description: Local media library with a web player
+ Platno scans your video folders, recognises movies and series, and plays
+ them in a browser. Media files are never modified. Static program; FFmpeg
+ converts videos that browsers cannot play directly.

@@ -1,0 +1,18 @@
+# Assembles the published image from the programs the release workflow already built (static Linux
+# binaries), so no compiling happens here. Build from source with the plain Dockerfile instead.
+#   mkdir docker-bin && cp platno-X-linux-x86_64 docker-bin/platno-linux-amd64 && cp platno-X-linux-aarch64 docker-bin/platno-linux-arm64
+#   docker buildx build -f Dockerfile.release --platform linux/amd64,linux/arm64 -t NAME/platno:VERSION --push .
+FROM debian:bookworm-slim
+ARG TARGETARCH
+LABEL org.opencontainers.image.title="Platno" \
+      org.opencontainers.image.description="Local media library with a web player" \
+      org.opencontainers.image.source="https://github.com/WebLJ-si/Platno"
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl && rm -rf /var/lib/apt/lists/* && useradd --uid 10001 --create-home media && mkdir /data && chown media:media /data
+COPY docker-bin/platno-linux-${TARGETARCH} /usr/local/bin/platno
+RUN chmod 755 /usr/local/bin/platno && ln -s platno /usr/local/bin/smart-media-scanner
+ENV SMART_MEDIA_HOST=0.0.0.0 SMART_MEDIA_PORT=8787 SMART_MEDIA_DATA=/data SMART_MEDIA_DISTRIBUTION=docker
+USER media
+VOLUME ["/data"]
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS http://127.0.0.1:8787/api/auth/setup-status || exit 1
+ENTRYPOINT ["/usr/local/bin/platno"]

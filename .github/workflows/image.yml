@@ -1,0 +1,66 @@
+name: Docker image
+# Reusable: assembles a multi-architecture image from the programs built by build.yml (no compiling
+# in Docker, so it takes a minute) and pushes it to GitHub Container Registry. Docker Hub is added
+# when the repository has DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets.
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: Space-separated tags, for example "0.2.0 0.2 latest"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-linux-*
+          path: artifacts
+      - name: Collect the programs
+        run: |
+          mkdir -p docker-bin
+          cp artifacts/dist-linux-x86_64/platno-*-linux-x86_64 docker-bin/platno-linux-amd64
+          cp artifacts/dist-linux-aarch64/platno-*-linux-aarch64 docker-bin/platno-linux-arm64
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker Hub login
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Work out the image names
+        id: names
+        env:
+          TAGS: ${{ inputs.tags }}
+          OWNER: ${{ github.repository_owner }}
+          HUB: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          list=""
+          for tag in $TAGS; do
+            list="$list ghcr.io/$owner/platno:$tag"
+            [ -n "$HUB" ] && list="$list $HUB/platno:$tag"
+          done
+          echo "list=$(echo $list | tr ' ' ',')" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.names.outputs.list }}

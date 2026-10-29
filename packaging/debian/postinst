@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    if ! getent passwd platno >/dev/null; then
+        adduser --system --group --quiet --home /var/lib/platno --no-create-home --shell /usr/sbin/nologin platno
+    fi
+    install -d -o platno -g platno -m 750 /var/lib/platno
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        systemctl enable platno >/dev/null 2>&1 || true
+        systemctl restart platno || true
+    fi
+fi
+exit 0

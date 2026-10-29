@@ -1,0 +1,10 @@
+# Settings for the Platno service. Restart it after changes: sudo systemctl restart platno
+# Listen only on this computer by default. Use 0.0.0.0 to reach Platno from other devices at home.
+#SMART_MEDIA_HOST=0.0.0.0
+#SMART_MEDIA_PORT=8787
+# Movie posters and ratings (optional, free): https://developer.themoviedb.org/docs/getting-started
+#TMDB_TOKEN=
+# Temporary conversion files; must be writable by the platno user and outside your media folders.
+#SMART_MEDIA_TRANSCODE_DIR=/var/tmp/platno
+# Set to 1 only when HTTPS is terminated by a reverse proxy in front of Platno.
+#SMART_MEDIA_COOKIE_SECURE=1

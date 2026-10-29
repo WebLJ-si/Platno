@@ -1,0 +1,7 @@
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+# The library, accounts and settings in /var/lib/platno are kept, even on purge.
+exit 0

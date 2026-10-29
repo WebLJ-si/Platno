@@ -1,0 +1,65 @@
+name: CI
+# Every push to main and to the test branch, and every pull request, runs the whole test suite.
+# Pushes to the test branch also build every program and a "test" Docker image, but publish no release.
+on:
+  push:
+    branches: [main, test]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Tests (Linux, with real Chrome)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg openssl sqlite3
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci --prefix telemetry-server
+      - run: npm install --prefix "$RUNNER_TEMP/playwright" playwright
+      - name: Run the whole suite
+        run: python3 scripts/test.py --browser --report "$RUNNER_TEMP/report.json"
+        env:
+          NODE_PATH: ${{ runner.temp }}/playwright/node_modules
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-report
+          path: ${{ runner.temp }}/report.json
+
+  portable:
+    name: Builds and unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: ./target/release/smart-media-scanner --version
+        shell: bash
+      # The suite is written for Unix paths; on Windows it is informational until it is ported.
+      - run: cargo test --locked
+        continue-on-error: ${{ matrix.os == 'windows-latest' }}
+
+  build:
+    name: Test-branch programs
+    if: github.ref == 'refs/heads/test'
+    needs: test
+    uses: ./.github/workflows/build.yml
+    with:
+      version: 0.0.0-test.${{ github.run_number }}
+
+  image:
+    name: Test-branch Docker image
+    if: github.ref == 'refs/heads/test'
+    needs: build
+    uses: ./.github/workflows/image.yml
+    secrets: inherit
+    with:
+      tags: test

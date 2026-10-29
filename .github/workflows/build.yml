@@ -1,0 +1,80 @@
+name: Build programs
+# Reusable: builds the ready-to-run programs for Linux, macOS and Windows and the .deb packages.
+# Nothing here publishes anything; the caller decides what to do with the uploaded artifacts.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version label used in file names (for example 0.2.0 or 0.2.0-test.15)
+        required: true
+        type: string
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.suffix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl, suffix: linux-x86_64, deb: amd64 }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, suffix: linux-aarch64, deb: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "${{ matrix.target }}" }
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      # A static program, so it can run right here and on any Linux distribution.
+      - run: ./target/${{ matrix.target }}/release/smart-media-scanner --version
+      - run: python3 scripts/package.py target/${{ matrix.target }}/release/smart-media-scanner "${{ inputs.version }}" ${{ matrix.suffix }}
+      - run: python3 scripts/build-deb.py target/${{ matrix.target }}/release/smart-media-scanner "${{ inputs.version }}" ${{ matrix.deb }}
+      # Install the package in a clean Debian to prove it installs and the program starts.
+      - name: Check the .deb in Debian
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" debian:12-slim sh -c '
+            apt-get update -qq && apt-get install -y -qq /dist/platno_*_${{ matrix.deb }}.deb >/dev/null &&
+            platno --version && dpkg -L platno | grep -q /lib/systemd/system/platno.service && getent passwd platno'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.suffix }}
+          path: dist/*
+          retention-days: 14
+
+  macos:
+    name: macOS universal
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p build
+          lipo -create -output build/platno target/aarch64-apple-darwin/release/smart-media-scanner target/x86_64-apple-darwin/release/smart-media-scanner
+          codesign --force --sign - build/platno
+          lipo -info build/platno
+          ./build/platno --version
+      - run: python3 scripts/package.py build/platno "${{ inputs.version }}" macos-universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-universal
+          path: dist/*
+          retention-days: 14
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: ./target/release/smart-media-scanner.exe --version
+      - run: python scripts/package.py target/release/smart-media-scanner.exe "${{ inputs.version }}" windows-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows-x86_64
+          path: dist/*
+          retention-days: 14

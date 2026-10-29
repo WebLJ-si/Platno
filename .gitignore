@@ -7,3 +7,5 @@
 # Python test/tool bytecode
 __pycache__/
 *.py[cod]
+dist/
+docker-bin/
