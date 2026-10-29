@@ -21,7 +21,7 @@ def render(markdown):
         elif in_code: code.append(line)
         elif not line.strip(): flush()
         elif match := re.match(r'^(#{1,3}) (.+)$',line):
-            flush(); level=len(match[1]);output.append(f'<h{level}>{html.escape(match[2])}</h{level}>')
+            flush(); level=len(match[1]);anchor=' id="remote-access"' if match[2]=='Oddaljeni dostop (Remote access)' else '';output.append(f'<h{level}{anchor}>{html.escape(match[2])}</h{level}>')
         else: paragraph.append(line)
     flush()
     if in_code: raise ValueError('Unclosed Markdown code fence')

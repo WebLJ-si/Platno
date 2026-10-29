@@ -189,6 +189,100 @@ def run_regressions(api, request, db, base, video, direct):
         api('/api/cancel',{})
         api('/api/admin/library-settings',{'auto_sort':True,'scan_roots':[]})
         api('/api/admin/library-settings',{'auto_sort':True,'scan_roots':['']},status=400)
+    with case('scanning a real tree: unicode, nesting, ignored files, symlink loops, unreadable folders, locks, rescans and removed media'):
+        tree = base / 'scan-tree'
+        for relative in ['Movies/Blade.Runner.2049.2017.1080p.BluRay.mkv', 'Movies/Zażółć gęślą jaźń (2020).mp4',
+                         'Movies/Deep/A/B/C/D/Nested.Film.2015.avi', 'Movies/empty.2012.mkv', 'Show/Extras/Interview.mkv',
+                         'Movies/notes.txt', 'Movies/.DS_Store', 'Movies/poster.jpg']:
+            target = tree / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b'' if 'empty' in relative else b'not a real video')
+        (tree / 'Movies/loop').symlink_to('..', target_is_directory=True)
+        denied = tree / 'Movies/denied'
+        denied.mkdir()
+        (denied / 'Hidden.Film.2001.mkv').write_bytes(b'x')
+        denied.chmod(0)
+
+        def scan(full=False):
+            api('/api/scan', {'roots': [str(tree)], 'full_scan': full})
+            for _ in range(300):
+                status = api('/api/status')
+                if not status['running']:
+                    return status
+                time.sleep(.05)
+            raise AssertionError('scan did not finish')
+
+        def listed():
+            return {pathlib.Path(f['path']).name: f for f in api('/api/files') if f['path'].startswith(str(tree.resolve()))}
+        try:
+            api('/api/admin/library-settings', {'auto_sort': True, 'scan_roots': [str(tree)]})
+            status = scan()
+            assert status['phase'] == 'Complete' and status['processed'] == status['total'] == 5, status
+            assert any('denied' in e for e in status['errors']), status['errors']
+            files = listed()
+            assert set(files) == {'Blade.Runner.2049.2017.1080p.BluRay.mkv', 'Zażółć gęślą jaźń (2020).mp4', 'Nested.Film.2015.avi', 'empty.2012.mkv', 'Interview.mkv'}, set(files)
+            blade = files['Blade.Runner.2049.2017.1080p.BluRay.mkv']
+            assert (blade['parsed']['title'], blade['parsed']['year'], blade['parsed']['kind']) == ('Blade Runner 2049', 2017, 'movie'), blade['parsed']
+            assert files['Interview.mkv']['result']['kind'] == 'extra'
+            assert 'Hidden.Film.2001.mkv' not in files and 'loop' not in files
+            movie_library = next(x['id'] for x in api('/api/libraries')['libraries'] if x['kind'] == 'movie')
+            in_movies = {pathlib.Path(f['path']).name for f in api(f'/api/libraries/{movie_library}/files')['files']}
+            assert 'Zażółć gęślą jaźń (2020).mp4' in in_movies and 'Interview.mkv' not in in_movies
+
+            skipped = lambda st: sum(1 for e in st['events'] if e['message'].startswith('Skipped unchanged or locked'))
+            assert skipped(scan()) == 5
+
+            path = blade['path']
+            for bad in [{'kind': 'podcast'}, {'kind': 'movie', 'title': 'bad\u0000title'}, {'kind': 'movie', 'provider_id': 0}, {'kind': 'tv', 'season': 5000}]:
+                api('/api/override', {'path': path, 'override': bad}, status=400)
+            api('/api/override', {'path': path, 'override': {'kind': 'movie', 'title': '  Chosen by hand  '}})
+            scan(full=True)
+            locked = listed()['Blade.Runner.2049.2017.1080p.BluRay.mkv']
+            assert locked['locked'] is True and locked['result']['title'] == 'Chosen by hand', locked['result']
+
+            (tree / 'Show/Extras/Interview.mkv').unlink()
+            scan()
+            for _ in range(100):
+                gone = listed()['Interview.mkv']
+                if gone['available'] is False:
+                    break
+                time.sleep(.05)
+            else:
+                raise AssertionError('removed media was not reported unavailable')
+            assert listed()['Nested.Film.2015.avi']['available'] is not False
+        finally:
+            denied.chmod(0o755)
+            # Later groups and the browser suite expect only the three fixture videos.
+            for table in ('library_files', 'files'):
+                db.execute(f'DELETE FROM {table} WHERE path LIKE ?', (str(tree.resolve()).replace('%', '[%]') + '/%',))
+            db.commit()
+            assert db.execute('SELECT COUNT(*) FROM files').fetchone()[0] == 3
+    with case('owner-chosen conversion folder: validation, use by HLS, cleanup and reset'):
+        import shutil, tempfile
+        outside = pathlib.Path(tempfile.mkdtemp(prefix='plexv2-work-'))  # the fixture media root is the whole test directory
+        work = outside / 'work-folder'
+        for bad in ['relative/path', '', ' ', str(base / 'inside-media-root'), '/proc/definitely/not/writable\u0000']:
+            if bad.strip():
+                api('/api/owner/settings', {'key': 'transcode_dir', 'value': bad}, status=400)
+        assert api('/api/owner/settings')['transcode_dir_from_environment'] is False
+        api('/api/owner/settings', {'key': 'transcode_dir', 'value': 'x' * 2000}, status=400)
+        saved = api('/api/owner/settings', {'key': 'transcode_dir', 'value': str(work)})
+        assert saved['effective_transcode_dir'] == str(work.resolve()), saved
+        session = api('/api/playback/hls/start', {'path': str(video), 'quality': '480'})
+        session_dir = work.resolve() / ('smart-media-hls-' + session['id'])
+        assert session_dir.is_dir(), list(work.iterdir())
+        api('/api/playback/hls/stop', {'id': session['id']})
+        for _ in range(100):
+            if not session_dir.exists():
+                break
+            time.sleep(.05)
+        else:
+            raise AssertionError('stopped stream left its files in the chosen folder')
+        admin = login('reg-admin@example.test', 'regression password 123')
+        api('/api/owner/settings', {'key': 'transcode_dir', 'value': str(base)}, status=403, opener=admin)
+        api('/api/owner/settings', {'key': 'transcode_dir', 'value': ''})
+        assert api('/api/owner/settings')['effective_transcode_dir'] != str(work.resolve())
+        shutil.rmtree(outside, ignore_errors=True)
     with case('metadata validation, missing keys and cached collection reads'):
         for query in [{'q':'','kind':'movie'},{'q':'title','kind':'unknown'},{'q':'x'*201,'kind':'tv'}]:api('/api/metadata/search?'+urlencode(query),status=400)
         api('/api/metadata/search?'+urlencode({'q':'Example','kind':'movie'}),status=400)

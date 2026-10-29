@@ -45,12 +45,23 @@ pub fn normalize(s: &str) -> String {
         .join(" ")
 }
 fn clean(s: &str) -> String {
-    let s = re(r"(?i)(?:[ ._\-\[(]+)(?:\d{3,4}x\d{3,4}|2160p|1080p|720p|480p|360p|4k|bdrip|sl(?:o|v)subs?|engsubs?|blu[ .-]?ray|web[ .-]?(?:dl|rip)|hdtv|x26[45]|h[ .]?26[45]|hevc|av1|hdr10?|dolby[ .]?vision|aac|dts|atmos|remux|proper|repack|extended)\b.*$").replace(s, "");
+    let s = re(r"(?i)(?:[ ._\-\[(]+)(?:[0-9]{3,4}x[0-9]{3,4}|2160p|1080p|720p|480p|360p|4k|bdrip|sl(?:o|v)subs?|engsubs?|blu[ .-]?ray|web[ .-]?(?:dl|rip)|hdtv|x26[45]|h[ .]?26[45]|hevc|av1|hdr10?|dolby[ .]?vision|aac|dts|atmos|remux|proper|repack|extended)\b.*$").replace(s, "");
     s.replace(['.', '_'], " ")
         .trim_matches(|c: char| c.is_whitespace() || "-[]()".contains(c))
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+// Titles such as "Blade Runner 2049 (2017)" or "2001 A Space Odyssey (1968)"
+// contain year-like numbers. Prefer a bracketed year, otherwise the last one.
+fn release_year(text: &str) -> Option<regex::Match<'_>> {
+    let years: Vec<_> = re(r"\b(?:19|20)[0-9]{2}\b").find_iter(text).collect();
+    years
+        .iter()
+        .rev()
+        .find(|m| text[..m.start()].ends_with(['(', '[']) && text[m.end()..].starts_with([')', ']']))
+        .or(years.last())
+        .copied()
 }
 pub fn parse(path: &Path) -> Parsed {
     let stem = path
@@ -72,16 +83,16 @@ pub fn parse(path: &Path) -> Parsed {
         .to_string_lossy()
         .to_string();
     let pattern = re(
-        r"(?i)\b(?:s(?:eason)?[ ._-]*0*(\d{1,2})[ ._-]*(?:e|ep(?:isode)?)[ ._-]*0*(\d{1,3})|0*(\d{1,2})x0*(\d{1,3}))",
+        r"(?i)\b(?:s(?:eason)?[ ._-]*0*([0-9]{1,2})[ ._-]*(?:e|ep(?:isode)?)[ ._-]*0*([0-9]{1,3})|0*([0-9]{1,2})x0*([0-9]{1,3}))",
     );
-    let season_re = re(r"(?i)\b(?:s|season)[ ._-]*0*(\d{1,2})\b");
-    let ep_re = re(r"(?i)\b(?:e|ep|episode)[ ._-]*0*(\d{1,3})\b");
-    let year_re = re(r"\b(19\d{2}|20\d{2})\b");
+    let season_re = re(r"(?i)\b(?:s|season)[ ._-]*0*([0-9]{1,2})\b");
+    let ep_re = re(r"(?i)\b(?:e|ep|episode)[ ._-]*0*([0-9]{1,3})\b");
+    let year_re = re(r"\b(19[0-9]{2}|20[0-9]{2})\b");
     let season;
     let mut episodes = vec![];
     let mut prefix = stem.as_str();
     let mut suffix = "";
-    let special = re(r"(?i)\bs\d{1,2}x\d{1,3}\b").is_match(&stem);
+    let special = re(r"(?i)\bs[0-9]{1,2}x[0-9]{1,3}\b").is_match(&stem);
     if let Some(c) = pattern.captures(&stem).filter(|_| !special) {
         let m = c.get(0).unwrap();
         prefix = &stem[..m.start()];
@@ -97,18 +108,21 @@ pub fn parse(path: &Path) -> Parsed {
         {
             episodes.push(n);
         }
-        let extra = re(r"(?i)^(?:[ ._+]*(?:e|ep)[ ._]*0*\d{1,3})+");
+        let extra = re(r"(?i)^(?:[ ._+]*(?:e|ep)[ ._]*0*[0-9]{1,3})+");
         if let Some(m) = extra.find(suffix) {
-            for c in re(r"(?i)(?:e|ep)[ ._-]*0*(\d{1,3})").captures_iter(m.as_str()) {
+            for c in re(r"(?i)(?:e|ep)[ ._-]*0*([0-9]{1,3})").captures_iter(m.as_str()) {
                 if let Ok(n) = c[1].parse() {
                     episodes.push(n)
                 }
             }
             suffix = &suffix[m.end()..];
         }
-        let range = re(r"(?i)^\s*-[ ._]*(?:e|ep)?0*(\d{1,3})\b");
+        // A bare number is a range end only when attached ("E01-03"); after
+        // spaces it is the start of a title such as "S01E02 - 7 Days Later".
+        let range = re(r"(?i)^(?:\s*-[ ._]*(?:e|ep)0*([0-9]{1,3})|-0*([0-9]{1,3}))\b");
         if let Some(c) = range.captures(suffix) {
-            if let (Some(&start), Ok(end)) = (episodes.first(), c[1].parse::<u32>()) {
+            let end = c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().parse::<u32>());
+            if let (Some(&start), Some(Ok(end))) = (episodes.first(), end) {
                 if end > start && end - start <= 20 {
                     episodes.extend(start + 1..=end);
                 }
@@ -126,7 +140,7 @@ pub fn parse(path: &Path) -> Parsed {
             if episodes.is_empty() {
                 // Compact SxxEyy represented as 714 or 0714, only if the
                 // parent establishes the same season.
-                let compact = re(r"\b(\d{3,4})\b");
+                let compact = re(r"\b([0-9]{3,4})\b");
                 if let Some(c) = compact.captures(&stem) {
                     let digits = &c[1];
                     let split = digits.len() - 2;
@@ -142,11 +156,12 @@ pub fn parse(path: &Path) -> Parsed {
             }
         }
     }
-    let year = year_re
-        .captures(&stem)
-        .or_else(|| year_re.captures(&parent))
-        .or_else(|| year_re.captures(&grand))
-        .and_then(|c| c[1].parse().ok());
+    let stem_year = release_year(&stem);
+    let year = stem_year
+        .map(|m| m.as_str().to_owned())
+        .or_else(|| year_re.captures(&parent).map(|c| c[1].to_owned()))
+        .or_else(|| year_re.captures(&grand).map(|c| c[1].to_owned()))
+        .and_then(|y| y.parse().ok());
     // Names of bonus folders are not reliable show titles. Only treat an
     // Extras folder as a bonus folder when it sits beneath a specific owner,
     // so a real show named "Extras" under a generic library is not discarded.
@@ -196,7 +211,7 @@ pub fn parse(path: &Path) -> Parsed {
         });
     let extra = special || bonus_folder || (episodes.is_empty() && bonus_name.is_match(&stem));
     let collection = re(
-        r"(?i)[ ._-]+(?:complete(?:[ ._-]+classic)?[ ._-]+collection|season[ ._-]+\d+[ ._-]+to[ ._-]+\d+).*$",
+        r"(?i)[ ._-]+(?:complete(?:[ ._-]+classic)?[ ._-]+collection|season[ ._-]+[0-9]+[ ._-]+to[ ._-]+[0-9]+).*$",
     );
     let region = re(r"(?i)\s*\((?:us|uk)\)");
     let folder_title =
@@ -213,7 +228,7 @@ pub fn parse(path: &Path) -> Parsed {
         } else {
             c
         }
-    } else if let Some(year_match) = year_re.find(&stem) {
+    } else if let Some(year_match) = stem_year {
         let before = clean(&stem[..year_match.start()]);
         if before.is_empty() {
             clean(&stem[year_match.end()..])
@@ -230,13 +245,13 @@ pub fn parse(path: &Path) -> Parsed {
     };
     let episode_title = if !episodes.is_empty() {
         let value = clean(suffix);
-        if re(r"(?i)^episode[ ._-]*0*\d+$").is_match(&value) {
+        if re(r"(?i)^episode[ ._-]*0*[0-9]+$").is_match(&value) {
             String::new()
         } else {
             value
         }
     } else if !year_re.is_match(&stem) {
-        let value = clean(&re(r"^\s*\d{1,4}[ ._-]+\s*").replace(&stem, ""));
+        let value = clean(&re(r"^\s*[0-9]{1,4}[ ._-]+\s*").replace(&stem, ""));
         let title_norm = normalize(&title);
         if normalize(&value).starts_with(&(title_norm.clone() + " ")) {
             let words = title.split_whitespace().count();
@@ -266,7 +281,7 @@ pub fn parse(path: &Path) -> Parsed {
     };
     let collection_title = if episodes.is_empty()
         && re(r"(?i)\bcomplete(?:[ ._-]+classic)?[ ._-]+collection\b").is_match(&parent)
-        && re(r"^\s*\d{1,3}[ ._-]+").is_match(&stem)
+        && re(r"^\s*[0-9]{1,3}[ ._-]+").is_match(&stem)
         && !extra
     {
         Some(title.clone())
@@ -345,6 +360,57 @@ mod tests {
         let real = parse(Path::new("/Media/Episodes/Season 01/Episodes.S01E01.mkv"));
         assert_eq!(real.kind, "tv");
         assert_eq!(real.title, "Episodes");
+    }
+    #[test]
+    fn non_ascii_digits_are_ignored_and_never_panic() {
+        for name in [
+            "Show - ７１４ - Title.mkv",
+            "Show S１E２.mkv",
+            "Show E７.mkv",
+            "٧١٤ Show.mkv",
+            "Show ２０１９.mkv",
+        ] {
+            let p = parse(Path::new(&format!("/Media/Show/Season 7/{name}")));
+            assert!(!p.episodes.contains(&0), "{name}: {:?}", p.episodes);
+        }
+    }
+    #[test]
+    fn parser_survives_pseudo_random_unicode_names() {
+        let alphabet: Vec<char> = "aZ09 ._-+()[]ExSsé世٣７\u{301}'’&".chars().collect();
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        for _ in 0..600 {
+            let mut name = String::new();
+            for _ in 0..(seed % 40) {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                name.push(alphabet[(seed >> 33) as usize % alphabet.len()]);
+            }
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            for dir in ["/Media/Show/Season 3", "/Media/Show (2011)", "/"] {
+                parse(Path::new(&format!("{dir}/{name}.mkv")));
+            }
+        }
+    }
+    #[test]
+    fn numeric_title_after_episode_is_not_a_range() {
+        let p = parse(Path::new("/Media/Show/Season 01/Show S01E02 - 7 Days Later.mkv"));
+        assert_eq!(p.episodes, vec![2]);
+        assert_eq!(p.episode_title, "7 Days Later");
+        for name in ["Show S01E01-03.mkv", "Show S01E01-E03.mkv", "Show S01E01 - E03.mkv"] {
+            let p = parse(Path::new(&format!("/Media/Show/Season 01/{name}")));
+            assert_eq!(p.episodes, vec![1, 2, 3], "{name}");
+        }
+    }
+    #[test]
+    fn year_like_titles_use_the_release_year() {
+        for (path, title, year) in [
+            ("/Movies/Blade.Runner.2049.2017.1080p.BluRay.mkv", "Blade Runner 2049", 2017),
+            ("/Movies/Blade Runner 2049 (2017) 1080p.mkv", "Blade Runner 2049", 2017),
+            ("/Movies/2001 A Space Odyssey (1968).mkv", "2001 A Space Odyssey", 1968),
+            ("/Movies/1917.2019.1080p.mkv", "1917", 2019),
+        ] {
+            let p = parse(Path::new(path));
+            assert_eq!((p.title.as_str(), p.year, p.kind.as_str()), (title, Some(year), "movie"), "{path}");
+        }
     }
     #[test]
     fn practical_library_patterns() {

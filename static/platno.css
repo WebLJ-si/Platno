@@ -67,3 +67,9 @@ dialog.player-dialog{max-width:1600px;width:96vw;border-radius:20px;padding:0;ba
 .overview-hero .feature-poster .poster{border-radius:14px}
 .subtitle-sync-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}.subtitle-sync-controls button{min-height:34px;padding:6px 12px;background:#17171ed9;color:#f4f4f5;border:1px solid #ffffff30;font-size:11px}.subtitle-sync-controls span{font:10px/1.5 var(--mono);color:#d4d4d8;flex:1;min-width:160px}.subtitle-sync-controls button:disabled{opacity:.5}
 @media(max-width:760px){.subtitle-sync-controls{gap:6px}.subtitle-sync-controls span{flex-basis:100%;font-size:9px}.player-action-row{max-height:29dvh}}
+
+/* Remote setup diagnostics and long hostnames must fit narrow settings panels. */
+.remote-access-panel{min-width:0;overflow-wrap:anywhere}.remote-access-panel code{white-space:normal;overflow-wrap:anywhere}.remote-access-panel .toolbar{min-width:0}.remote-access-panel button{max-width:100%;white-space:normal}
+@media(max-width:360px){.settings-tabs{margin-inline:-16px;padding-inline:16px}}
+.beta-diagnostics-notice{display:flex;align-items:center;gap:14px;justify-content:space-between;padding:14px 18px;margin:16px 0;border:1px solid #586b28;border-radius:10px;background:#1c2414;color:#d8e6ba;font-size:12px;line-height:1.6}.beta-diagnostics-notice button{flex-shrink:0;font-size:11px}.telemetry-panel{overflow-wrap:anywhere}.telemetry-panel>label{display:block;margin:14px 0}@media(max-width:760px){.beta-diagnostics-notice{flex-direction:column;align-items:stretch}}
+.panel code{overflow-wrap:anywhere}

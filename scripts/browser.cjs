@@ -1,4 +1,6 @@
 const assert=require('node:assert/strict');
+// Without this, Playwright's setOffline() does not affect service-worker fetches in current Chrome.
+process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS??='1';
 const playwright=require('playwright');
 (async()=>{
  const browser=await playwright.chromium.launch({channel:'chrome',headless:true});
@@ -80,6 +82,19 @@ const playwright=require('playwright');
    await page.getByRole('button',{name:'Back to library',exact:true}).click();
   }
   await page.locator('#nav').getByRole('button',{name:'Settings',exact:true}).click();
+  const remotePanel=page.locator('.remote-access-panel');await remotePanel.waitFor();
+  assert(await remotePanel.getByText('Disabled',{exact:true}).isVisible());
+  const remoteReady=await page.evaluate(async()=> (await api('/api/owner/remote-access')).configured);
+  assert.equal(await remotePanel.getByRole('button',{name:'Enable remote access',exact:true}).isDisabled(),!remoteReady);
+  await remotePanel.getByRole('button',{name:'Disable remote access',exact:true}).click();
+  await page.locator('#remote-access-status').filter({hasText:'Remote access disabled.'}).waitFor();
+  assert.equal(await remotePanel.getByRole('button',{name:'Enable remote access',exact:true}).isDisabled(),!remoteReady);
+  await remotePanel.getByRole('button',{name:'Refresh status',exact:true}).click();
+  await page.locator('#remote-access-status').filter({hasText:'Status refreshed.'}).waitFor();
+  assert.equal(await remotePanel.locator('a').getAttribute('href'),'/help#remote-access');
+  for(const width of [320,390,768,1440]){await page.setViewportSize({width,height:950});await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1,null,{timeout:3000}).catch(()=>{});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`remote settings overflow at ${width}`)}
+  await page.setViewportSize({width:390,height:950});await remotePanel.screenshot({path:'/tmp/plexv2-remote-settings-mobile.png'});
+  await page.setViewportSize({width:1440,height:950});
   await page.getByLabel('Accent color',{exact:true}).selectOption('mint');await page.waitForFunction(()=>document.body.dataset.accent==='mint');
   await page.getByLabel('Reduce motion',{exact:true}).check();await page.waitForFunction(()=>document.body.classList.contains('reduce-motion'));
 
@@ -96,10 +111,10 @@ const playwright=require('playwright');
   assert.equal(await phoneLibraries.getAttribute('aria-expanded'),'false');
   for(const width of [320,390,768,1024,1920]){
    await page.setViewportSize({width,height:844});
-   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`layout must not overflow at ${width}px`);
+   await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1,null,{timeout:3000}).catch(()=>{});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`layout must not overflow at ${width}px`);
   }
   await page.setViewportSize({width:390,height:844});
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'mobile page must not overflow');
+  await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1,null,{timeout:3000}).catch(()=>{});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'mobile page must not overflow');
   await page.locator('.card').first().focus();await page.keyboard.press('Enter');assert(await page.locator('#dialog').evaluate(el=>el.open));
   await page.getByRole('button',{name:'Close',exact:true}).click();
   await page.screenshot({path:process.env.PLEXV2_SCREENSHOT||'/tmp/plexv2-mobile-regression.png',fullPage:true});

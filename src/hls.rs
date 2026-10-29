@@ -1,4 +1,4 @@
-use crate::{playback, App};
+use crate::{db, playback, App};
 use axum::{
     body::Body,
     extract::{Path, State},
@@ -32,6 +32,56 @@ struct Session {
 static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static REAPER: Once = Once::new();
+const DIRECTORY_PREFIX: &str = "smart-media-hls-";
+pub(crate) const WORK_DIR_ENV: &str = "SMART_MEDIA_TRANSCODE_DIR";
+// Scratch space for video conversion and speech-sync files: the environment wins over the
+// owner's saved setting, and the system temp folder is the default.
+pub(crate) fn work_root(app: &App) -> PathBuf {
+    std::env::var_os(WORK_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            db(app)
+                .query_row("SELECT value FROM server_settings WHERE key='transcode_dir'", [], |r| r.get::<_, String>(0))
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(std::env::temp_dir)
+}
+// Segments are `.ts` files, which the scanner would index as videos inside a media folder.
+pub(crate) fn validate_work_dir(app: &App, raw: &str) -> Result<PathBuf, String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > 1024 || raw.chars().any(char::is_control) || !std::path::Path::new(raw).is_absolute() {
+        return Err("Enter an absolute folder path.".into());
+    }
+    let c = db(app);
+    let mut roots: Vec<String> = c.prepare("SELECT DISTINCT root FROM files").and_then(|mut s| s.query_map([], |r| r.get(0))?.collect()).unwrap_or_default();
+    for (table, column) in [("libraries", "roots"), ("settings", "value")] {
+        let filter = if table == "settings" { " WHERE key='library_scan_roots'" } else { "" };
+        let rows: Vec<String> = c.prepare(&format!("SELECT {column} FROM {table}{filter}")).and_then(|mut s| s.query_map([], |r| r.get(0))?.collect()).unwrap_or_default();
+        roots.extend(rows.iter().filter_map(|raw| serde_json::from_str::<Vec<String>>(raw).ok()).flatten());
+    }
+    std::fs::create_dir_all(raw).map_err(|e| format!("Cannot create that folder: {e}"))?;
+    let folder = std::fs::canonicalize(raw).map_err(|e| format!("Cannot use that folder: {e}"))?;
+    if roots.iter().any(|root| std::fs::canonicalize(root).is_ok_and(|root| folder.starts_with(root))) {
+        return Err("Choose a folder outside your media folders, so temporary video files are not scanned.".into());
+    }
+    let probe = folder.join(format!(".plexv2-write-test-{}", std::process::id()));
+    std::fs::write(&probe, b"x").and_then(|_| std::fs::remove_file(&probe)).map_err(|_| "The server cannot write to that folder.".to_string())?;
+    Ok(folder)
+}
+// A crash or SIGKILL skips session cleanup. Only directories idle for `idle` are removed,
+// so a second server on this machine keeps its live streams.
+pub fn remove_orphans(root: &std::path::Path, idle: Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    entries.flatten().filter(|entry| {
+        let name = entry.file_name();
+        name.to_string_lossy().strip_prefix(DIRECTORY_PREFIX).is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+            && entry.metadata().is_ok_and(|m| m.is_dir() && m.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age >= idle))
+            && std::fs::remove_dir_all(entry.path()).is_ok()
+    }).count()
+}
 // Cancelling setup must not leave a temporary streaming directory behind.
 struct StreamingDir(Option<PathBuf>);
 impl Drop for StreamingDir {
@@ -105,8 +155,9 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     let mut random=[0u8;32];
     if ring::rand::SystemRandom::new().fill(&mut random).is_err() {return error(StatusCode::INTERNAL_SERVER_ERROR,"Cannot create playback session");}
     let id=random.iter().map(|b|format!("{b:02x}")).collect::<String>();
-    let dir = std::env::temp_dir().join(format!("smart-media-hls-{id}"));
-    if tokio::fs::create_dir(&dir).await.is_err() {
+    let root = work_root(&app);
+    let dir = root.join(format!("{DIRECTORY_PREFIX}{id}"));
+    if tokio::fs::create_dir_all(&root).await.is_err() || tokio::fs::create_dir(&dir).await.is_err() {
         return error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Cannot create streaming cache",
@@ -249,6 +300,22 @@ mod tests {
         assert!(playlist_ready(
             b"#EXTM3U\n#EXTINF:1,\na.ts\n#EXT-X-ENDLIST\n"
         ));
+    }
+    #[test]
+    fn startup_removes_only_idle_session_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "ab".repeat(32);
+        let old = root.path().join(format!("{DIRECTORY_PREFIX}{id}"));
+        let fresh = root.path().join(format!("{DIRECTORY_PREFIX}{}", "cd".repeat(32)));
+        let unrelated = root.path().join("other-directory");
+        for dir in [&old, &fresh, &unrelated] {
+            std::fs::create_dir(dir).unwrap();
+            std::fs::write(dir.join("segment000000.ts"), b"x").unwrap();
+        }
+        std::fs::File::open(&old).unwrap().set_modified(std::time::SystemTime::now() - Duration::from_secs(7200)).unwrap();
+        assert_eq!(remove_orphans(root.path(), Duration::from_secs(3600)), 1);
+        assert!(!old.exists() && fresh.exists() && unrelated.exists());
+        assert_eq!(remove_orphans(&root.path().join("missing"), Duration::ZERO), 0);
     }
     #[test]
     fn only_playlist_and_numbered_segments_are_accessible() {

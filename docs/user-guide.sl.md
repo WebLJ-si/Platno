@@ -86,6 +86,8 @@ Play odpre predvajalnik. Združljivi H.264/AAC MP4 se pošiljajo neposredno z HT
 
 Auto pri pretvorbi HLS pripravi različice 480p, 720p in 1080p; predvajalnik izbira kakovost glede na razmere. Tri različice hkrati porabijo več procesorja. Na šibkem strežniku izberite fiksno kakovost 480p ali 720p. Pretvorba ne ustvari podrobnosti, ki jih ni v izvirniku.
 
+Mapo za začasne datoteke pretvorbe (in pri sinhronizaciji podnapisov z govorom) lahko lastnik izbere v Nastavitvah v razdelku Conversion folder ali z okoljsko spremenljivko `SMART_MEDIA_TRANSCODE_DIR`. Uporabite hiter disk s prostim prostorom; mapa mora biti zunaj map z mediji, da skener ne indeksira začasnih datotek. Če je spremenljivka nastavljena, ima prednost pred nastavitvijo.
+
 Če neposredno predvajanje odpove, predvajalnik poskusi združljivo pretvorbo. Compatibility mode ročno vključi programsko pretvorbo H.264/AAC pri trenutnem položaju. Pri Auto uporabi fiksno 720p in ob slabem indeksu datoteko dekodira od začetka do izbranega časa. To lahko traja dlje, vendar obide nedelujoče hitro iskanje. FFmpeg mora podpirati vhodni kodek; šifriranih ali nepopravljivo poškodovanih datotek ni mogoče zagotovljeno predvajati. Dolgo nalaganje je lahko posledica odklopljenega diska, omrežne mape ali počasne pretvorbe; počakajte na sporočilo in uporabite Try again.
 
 HLS in progresivna pretvorba si delita največ štiri sočasna mesta na strežniku. Sporočilo o zasedenih mestih pomeni, da zaprite neuporabljeno predvajanje oziroma poskusite pozneje. To ni čakalna vrsta ali omejitev po računu.
@@ -177,3 +179,33 @@ Strežnik lahko iz kratkih zvočnih vzorcev lokalno ustvari prepis s časovnimi 
 Automatic subtitle sync v nastavitvah profila je privzeto vključen, kadar je lokalni pogon nameščen. Ob izbiri podnapisov analizira največ dva 75-sekundna vzorca. Najmanj trije različni ujemajoči se odlomki govora določijo zamik; pri daljšem videu lahko drugi vzorec oceni tudi postopno časovno drsenje. Slabo ujemanje, prevedeni podnapisi ali druga montaža lahko preprečijo zanesljivo korekcijo; dotedanje časovne nastavitve ostanejo.
 
 Sync subtitles ponovno poskusi uskladitev. Cancel sync prekine opravilo trenutnega profila. Undo sync obnovi prvotne časovne oznake med trenutnim predvajanjem. Ročni Subtitle delay se prišteje k uskladitvi. Nastavitev je ločena za obe prikazani podnapisni sledi in sledi preskokom v videu. Izvirne datoteke se ne prepišejo. Vzorci in prepisi ostanejo na strežniku v začasnem imeniku; predpomnjena je samo ugotovljena časovna korekcija, ločeno po profilu, videu, podnapisu, zvoku in modelu.
+
+## Oddaljeni dostop (Remote access)
+
+Lastnik v Settings → Remote access izbere samodejno UPnP preslikavo ali ročno posredovanje TCP vrat. Funkcija je privzeto izklopljena. Uporablja ločen strežnik HTTPS; običajnih vrat HTTP 8787 ne posredujte v internet. Vsi gledalci se morajo prijaviti. Začetna nastavitev lastniškega računa prek oddaljenega vmesnika ni dovoljena.
+
+Pred vklopom rezervirajte stalni lokalni IPv4 naslov strežnika in nastavite DNS ime, ki kaže na vaš javni IP. Za to ime potrebujete zaupanja vreden TLS certifikat in zasebni ključ. Certifikat pridobite in obnavljajte z ACME odjemalcem, po možnosti prek DNS izziva. Aplikacija certifikatov ne izdaja sama. Ključ hranite zunaj repozitorija in knjižnice, z omejenimi dovoljenji. Ne prezrite opozoril brskalnika o certifikatu.
+
+Spremenljivke nastavite v okolju procesa in znova zaženite strežnik; datoteke .env se ne naložijo samodejno. Primer:
+
+```sh
+export SMART_MEDIA_REMOTE_HOSTNAME=media.example.com
+export SMART_MEDIA_REMOTE_IP=192.168.1.50
+export SMART_MEDIA_REMOTE_PORT=8943
+export SMART_MEDIA_TLS_CERT=/private/path/fullchain.pem
+export SMART_MEDIA_TLS_KEY=/private/path/privkey.pem
+```
+
+Nato v Settings → Remote access izberite Automatic · UPnP in Enable remote access. Domači usmerjevalnik mora podpirati UPnP in časovno omejene preslikave; požarni zid mora dovoliti TCP na izbranih lokalnih vratih HTTPS. Uporabite prikazani naslov HTTPS z imenom gostitelja in zunanjimi vrati. DNS zapis mora kazati na javni IP. Dosegljivost preverite prek mobilnih podatkov.
+
+Preslikava velja deset minut in se med delovanjem obnavlja približno vsake štiri minute. Disable remote access zapre HTTPS in odstrani potrjeno lastno preslikavo; enako velja ob pravilni zaustavitvi. Obnovljeni certifikati se uspešno naložijo iz istih datotek vsako minuto. Uspešen status Router mapped potrjuje pravilo na usmerjevalniku, ne preverjene dosegljivosti z interneta. CGNAT, dvojni NAT, napačen DNS, certifikat ali požarni zid lahko povezavo še vedno preprečijo. NAT-PMP/PCP in posredniški relay v tej različici nista podprta.
+
+Pri Manual TCP forwarding sami posredujte zunanja TCP vrata na prikazani lokalni HTTPS naslov. Če so zunanja vrata drugačna, popravite vrata v naslovu, ki ga uporabljate zunaj doma. Ročno pravilo odstranite na usmerjevalniku; aplikacija ga ne upravlja. Po ponovnem zagonu se uspešno shranjena nastavitev obnovi, samodejno izbrana zunanja vrata pa se lahko spremenijo.
+
+## Diagnostika beta različice
+
+Stabilna različica in običajna gradnja iz izvorne kode privzeto ne pošiljata diagnostike. Jasno označena diagnostična beta samodejno pošilja tehnične kategorije napak, čas delovanja in zamaskirano rekonstrukcijo vmesnika ob napaki. Pred prenosom mora biti na voljo obvestilo BETA.md; aplikacija pokaže obvestilo tudi med uporabo.
+
+V Settings → Beta diagnostics lahko brskalnik izključi poročanje ali samo replay. Do Not Track in Global Privacy Control izključita poročanje iz brskalnika. Lastnik lahko izključi poročanje celotnega strežnika; spremenljivka SMART_MEDIA_TELEMETRY=off ga prav tako prepreči. Izbira posameznega brskalnika ne izključi lastnikovih strežniških poročil. Že poslanih podatkov ni mogoče priklicati nazaj.
+
+Poročilo ne vključuje imen, e-pošte, računov, gesel, poti do datotek, izvirnih URL-jev, naslovov medijev, vsebine knjižnice, vrednosti obrazcev, slik, zvoka ali videa. Replay prikazuje samo pravokotnike in vrste interakcij. Naključne oznake sej niso trajna oznaka uporabnika. Gostovanje lahko vseeno obdeluje IP naslove; popolne anonimnosti ni mogoče obljubiti. Zasebna nadzorna plošča hrani omejeno število poročil največ sedem dni. Odsotnost heartbeat signala ni zanesljiv dokaz nedelovanja strežnika.

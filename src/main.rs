@@ -5,7 +5,9 @@ mod media_features;
 mod parser;
 mod playback;
 mod processes;
+mod remote_access;
 mod subtitle_sync;
+mod telemetry;
 use axum::{
     extract::{Path as AxPath, Query, State},
     http::{HeaderMap, StatusCode},
@@ -1433,12 +1435,29 @@ async fn save_library_settings(State(app):State<App>,Json(input):Json<LibrarySet
     Json(json!({"ok":true})).into_response()
 }
 
+// A manual override is stored verbatim and locked, so reject values no catalogue could produce.
+fn valid_override(ov: &Override) -> bool {
+    matches!(ov.kind.as_str(), "movie" | "tv" | "video" | "extra")
+        && ov.provider_id.is_none_or(|id| id > 0)
+        && ov.title.as_deref().is_none_or(|t| {
+            let t = t.trim();
+            !t.is_empty() && t.chars().count() <= 200 && !t.chars().any(char::is_control)
+        })
+        && ov.season.is_none_or(|s| s <= 1000)
+        && ov
+            .episodes
+            .as_ref()
+            .is_none_or(|e| e.len() <= 100 && e.iter().all(|n| *n <= 100_000))
+}
 async fn update(State(app): State<App>, Json(req): Json<Value>) -> impl IntoResponse {
     let path = req["path"].as_str().unwrap_or("");
     let ov: Override = match serde_json::from_value(req["override"].clone()) {
         Ok(v) => v,
         Err(_) => return StatusCode::BAD_REQUEST,
     };
+    if !valid_override(&ov) {
+        return StatusCode::BAD_REQUEST;
+    }
     let c = db(&app);
     let old: Result<String, _> =
         c.query_row("SELECT result FROM files WHERE path=?1", [path], |r| {
@@ -1454,7 +1473,7 @@ async fn update(State(app): State<App>, Json(req): Json<Value>) -> impl IntoResp
             v["provider"] = json!(if ov.kind == "movie" { "tmdb" } else { "tvmaze" });
         }
         if let Some(t) = ov.title {
-            v["title"] = json!(t)
+            v["title"] = json!(t.trim())
         }
         if let Some(s) = ov.season {
             v["season"] = json!(s)
@@ -1950,7 +1969,9 @@ async fn main() {
     };
     init(&db(&app));
     auth::init(&app.db);
+    telemetry::init(app.clone());
     repair_bonus_records(&db(&app));
+    hls::remove_orphans(&hls::work_root(&app), Duration::from_secs(3600));
     let auth_db = app.db.clone();
     let routes = Router::new()
         .route("/", get(index))
@@ -1963,6 +1984,10 @@ async fn main() {
         .route("/assets/jetbrains-mono.ttf", get(||async { ([(axum::http::header::CONTENT_TYPE,"font/ttf"),(axum::http::header::CACHE_CONTROL,"public, max-age=604800")],include_bytes!("../static/fonts/jetbrains-mono.ttf").as_slice()) }))
         .route("/assets/icon-192.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-192.png").as_slice()) }))
         .route("/assets/icon-512.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-512.png").as_slice()) }))
+        .route("/assets/telemetry.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/telemetry.js")) }))
+        .route("/api/telemetry/config", get(telemetry::config))
+        .route("/api/telemetry/report", post(telemetry::report).layer(axum::extract::DefaultBodyLimit::max(160000)))
+        .route("/api/owner/telemetry", post(telemetry::owner_setting))
         .route("/api/auth/setup-status", get(auth::setup_status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
@@ -1980,6 +2005,7 @@ async fn main() {
         .route("/api/admin/accounts", get(auth::admin_accounts).post(auth::create_account))
         .route("/api/admin/health", get(diagnostics::health))
         .route("/api/admin/dashboard", get(auth::admin_dashboard))
+        .route("/api/owner/remote-access", get(remote_access::status).post(remote_access::configure))
         .route("/api/owner/settings", get(auth::server_settings).post(auth::save_server_setting))
         .route("/api/owner/encoders", get(auth::owner_encoders))
         .route("/api/owner/accounts/credentials", post(auth::update_account_credentials))
@@ -2021,7 +2047,8 @@ async fn main() {
         .route("/api/playback/subtitle-sync/cancel", post(subtitle_sync::cancel))
         .route("/api/playback/transcode", get(playback::transcode))
         .route_layer(middleware::from_fn_with_state(auth_db, auth::guard))
-        .with_state(app.clone());
+        .with_state(app.clone())
+        .layer(middleware::from_fn(telemetry::observe));
     let port = std::env::var("SMART_MEDIA_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
@@ -2031,6 +2058,7 @@ async fn main() {
         .await
         .expect("bind configured address");
     println!("Smart Media Scanner: http://{host}:{port}");
+    remote_access::init(app.clone(), routes.clone()).await;
     start_maintenance(app.clone());
     let (stop, stopped)=tokio::sync::oneshot::channel::<()>();
     let server=axum::serve(listener,routes).with_graceful_shutdown(async {let _=stopped.await;}).into_future();
@@ -2040,6 +2068,7 @@ async fn main() {
         _=shutdown_signal()=>{
             app.cancel.store(true,Ordering::Release);
             let _=stop.send(());
+            remote_access::shutdown().await;
             hls::shutdown_all().await;
             // A client can keep a stream open indefinitely; bound service shutdown.
             let _=tokio::time::timeout(Duration::from_secs(10),&mut server).await;
@@ -2823,5 +2852,78 @@ mod integration_tests {
         assert!(html.contains("episode-counts"));
         assert!(html.contains("setEpisodeFilter"));
         assert!(html.contains("availabilityRefreshDelay"));
+    }
+    #[test]
+    fn manual_override_rejects_values_no_catalogue_could_produce() {
+        let ok = |v: Value| valid_override(&serde_json::from_value(v).unwrap());
+        assert!(ok(json!({"kind":"tv","provider_id":5,"title":" Show ","season":2,"episodes":[1,2]})));
+        assert!(ok(json!({"kind":"extra"})));
+        for bad in [
+            json!({"kind":"podcast"}),
+            json!({"kind":"movie","provider_id":0}),
+            json!({"kind":"movie","provider_id":-3}),
+            json!({"kind":"movie","title":"   "}),
+            json!({"kind":"movie","title":"a\u{0}b"}),
+            json!({"kind":"movie","title":"x".repeat(201)}),
+            json!({"kind":"tv","season":1001}),
+            json!({"kind":"tv","episodes":vec![1;101]}),
+            json!({"kind":"tv","episodes":[100001]}),
+        ] {
+            assert!(!ok(bad.clone()), "{bad}");
+        }
+    }
+    #[test]
+    fn video_extensions_are_case_insensitive_and_exclude_other_files() {
+        for name in ["a.mkv", "a.MP4", "dir.v1/a.WebM", "a.m2ts"] {
+            assert!(videos(Path::new(name)), "{name}");
+        }
+        for name in ["a.srt", "a.txt", "mkv", ".mkv.bak", "a.mp3", "a"] {
+            assert!(!videos(Path::new(name)), "{name}");
+        }
+    }
+    #[test]
+    fn sidecar_subtitles_match_only_the_same_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["Movie.mkv", "Movie.srt", "Movie.sl.srt", "movie.EN.ass", "Movie2.srt", "Movies.srt", "Movie.txt", "Other.srt"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let mut found = subtitles(&dir.path().join("Movie.mkv"));
+        found.sort();
+        assert_eq!(found, ["Movie.sl.srt", "Movie.srt", "movie.EN.ass"]);
+    }
+    #[test]
+    fn numbered_title_support_requires_a_clear_best_title() {
+        let catalogue = vec![
+            json!({"id":1,"season":1,"number":1,"name":"The Power"}),
+            json!({"id":2,"season":1,"number":2,"name":"Just Set Up the Chairs"}),
+            json!({"id":3,"season":1,"number":3,"name":"Repeated"}),
+            json!({"id":4,"season":2,"number":1,"name":"Repeated"}),
+        ];
+        assert!(numbered_title_supported("Power", &catalogue[0], &catalogue));
+        assert!(numbered_title_supported("Just Set Up The Chairs", &catalogue[1], &catalogue));
+        assert!(!numbered_title_supported("Repeated", &catalogue[2], &catalogue), "duplicate title is ambiguous");
+        assert!(!numbered_title_supported("Something Else Entirely", &catalogue[1], &catalogue));
+        assert!(!numbered_title_supported("", &catalogue[0], &catalogue));
+    }
+    #[test]
+    fn library_kind_maps_unknown_results_to_video() {
+        for (kind, expected) in [("movie", "movie"), ("tv", "tv"), ("extra", "tv"), ("video", "video"), ("???", "video")] {
+            assert_eq!(library_kind_for_result(&json!({"kind":kind})), expected);
+        }
+        assert_eq!(library_kind_for_result(&json!({})), "video");
+    }
+    #[test]
+    fn conversion_folder_must_be_absolute_writable_and_outside_media_folders() {
+        let (temp, app) = fixture();
+        let media = temp.path().join("media");
+        std::fs::create_dir_all(media.join("nested")).unwrap();
+        db(&app).execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES('x',?1,1,0,'{}','{}','now')", [media.canonicalize().unwrap().to_string_lossy().to_string()]).unwrap();
+        for bad in ["", "relative", "bad\0path"] {
+            assert!(hls::validate_work_dir(&app, bad).is_err(), "{bad:?}");
+        }
+        assert!(hls::validate_work_dir(&app, media.to_str().unwrap()).is_err());
+        assert!(hls::validate_work_dir(&app, media.join("nested").to_str().unwrap()).is_err());
+        let ok = hls::validate_work_dir(&app, temp.path().join("scratch/deeper").to_str().unwrap()).unwrap();
+        assert!(ok.is_dir() && std::fs::read_dir(&ok).unwrap().count() == 0, "write probe must be removed");
     }
 }

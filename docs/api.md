@@ -73,7 +73,7 @@ Administrators and owners can use `/api/admin/accounts` (GET/POST), `/api/admin/
 
 Scanning uses `/api/scan` (POST: roots, optional library_id/full_scan), `/api/cancel` (POST) and `/api/status` (GET). `/api/choose-folder` opens a native macOS chooser and must only be called from explicit user interaction. Identification uses `/api/metadata/search`, `/api/metadata/match` (POST), and `/api/override` (POST). Subtitle lookup uses `/api/subtitles/status` and `/api/subtitles/search`.
 
-Owner-only endpoints are `/api/owner/settings` (GET/POST), `/api/owner/encoders`, `/api/owner/accounts/credentials` (POST), `/api/owner/providers`, `/api/owner/providers/tmdb` (POST), and `/api/owner/providers/opensubtitles` (POST). The legacy `/api/subtitles/key` mutation is owner-only too. Provider status never returns stored credentials. Empty keys at the API boundary clear private files; the UI's empty input keeps the current value by not submitting it.
+Owner-only endpoints are `/api/owner/settings` (GET/POST; keys `friendly_name`, `transcode_quality`, `hardware_encoder`, and `transcode_dir` — an absolute, writable folder outside all media folders, or empty to reset; GET also returns `effective_transcode_dir` and `transcode_dir_from_environment`, and `SMART_MEDIA_TRANSCODE_DIR` takes precedence), `/api/owner/encoders`, `/api/owner/accounts/credentials` (POST), `/api/owner/providers`, `/api/owner/providers/tmdb` (POST), and `/api/owner/providers/opensubtitles` (POST). The legacy `/api/subtitles/key` mutation is owner-only too. Provider status never returns stored credentials. Empty keys at the API boundary clear private files; the UI's empty input keeps the current value by not submitting it.
 
 ## Removed endpoints
 
@@ -88,3 +88,11 @@ Owner-only endpoints are `/api/owner/settings` (GET/POST), `/api/owner/encoders`
 - HLS start bodies and progressive conversion queries accept `compatible: true`. This forces software encoding and uses output-side seeking; auto HLS is requested as fixed 720p by the player in this mode.
 
 Speech samples/transcripts are private temporary files. The cache contains only timing parameters, keyed by the profile and signatures of the source media, subtitle, audio selection, and speech model. Manual refresh recomputes an existing result.
+
+### Owner remote access
+
+`GET /api/owner/remote-access` reports configuration readiness, HTTPS listener and UPnP lease state. `POST` accepts `{ "enabled": true, "automatic": true }`; use `automatic: false` for manual router rules or `enabled: false` to stop. Requires an owner session and same-origin browser requests. The mapping targets only the configured HTTPS LAN endpoint; the API cannot forward arbitrary ports. `reachable: null` means internet reachability was not independently tested. See [remote access](remote-access.md).
+
+### Optional diagnostic beta
+
+Authenticated `GET /api/telemetry/config` reports availability/channel, recipient hostname and current policy. `POST /api/telemetry/report` accepts only sanitized, bounded enum/numeric diagnostics and queues an upload without blocking playback (202; 204 when disabled; 400 for unsafe fields; 429 for a full queue/rate cap). `POST /api/owner/telemetry` with `{"enabled":false}` disables server/browser reporting and invalidates queued generations; only the owner can change it. Stable/source builds are off by default. The independent collector, schema, retention, privacy notice and deployment requirements are documented in `BETA.md` and `telemetry-server/README.md`.

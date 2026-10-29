@@ -8,7 +8,9 @@ The suite covers current user-visible features, significant API boundaries and n
 python3 scripts/test.py
 ```
 
-Add `--browser` for Google Chrome UI tests, with the Node `playwright` package available through normal resolution or `NODE_PATH`. See `development.md` for setup. All integration mutation tests use a newly created temporary catalogue and localhost server, generated video/audio/subtitles, fictional accounts and an ephemeral port. Existing production data and the running server are not test targets.
+Add `--browser` for Google Chrome UI tests (`scripts/browser.cjs` sets `PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS` so offline emulation reaches the service worker), with the Node `playwright` package available through normal resolution or `NODE_PATH`. See `development.md` for setup. All integration mutation tests use a newly created temporary catalogue and localhost server, generated video/audio/subtitles, fictional accounts and an ephemeral port. Existing production data and the running server are not test targets.
+
+The HTTPS integration test also requires the `openssl` CLI to generate its disposable test certificate.
 
 The runner builds a locked release executable and tests that executable. Each command's status and duration are written to `/tmp/plexv2-test-report.json`; `--report` changes the path. A failed step stops the pipeline and leaves an unsuccessful report. Python assertions must remain enabled: do not run integration tests with `python -O`.
 
@@ -20,6 +22,8 @@ The runner builds a locked release executable and tests that executable. Each co
 - `tests/player-controls.cjs` contains named Node tests for player behavior, profile persistence, progress throttling/beacon fallback and removed controls.
 - `scripts/integration.py` creates real synthetic media and decodes actual HLS/progressive output. `tests/api_regressions.py` adds named feature groups for the rest of the API, including failure paths and roles.
 - `scripts/browser.cjs` drives actual Chrome, observes runtime errors, and uses visible UI for major flows. It verifies 0/1/2 audio-track visibility using three different source files.
+- `tests/api-fuzz.py` sends ~2300 malformed requests (bad JSON, wrong types, huge/NUL/Unicode values, NaN/overflow queries) to every route of a disposable server and fails on any HTTP 500, dropped connection, hang or server exit. It skips the native folder chooser, logout and scan routes.
+- `tests/telemetry-forwarding.py` runs a beta server against a stub collector on localhost (plain HTTP is accepted only for loopback endpoints) and checks heartbeat and error forwarding, schema validity against the real collector, rejection of private fields, owner opt-out, stable channel and `SMART_MEDIA_TELEMETRY=off`. The live production relay check (`telemetry-server/tests/live-relay.cjs --live`) remains an explicit manual step.
 - `tests/help-renderer.py` checks HTML escaping, Unicode, code fences and generated-page parity. `render-help.py --check` guards against stale bundled help.
 
 ## Coverage matrix
@@ -38,7 +42,11 @@ The runner builds a locked release executable and tests that executable. Each co
 | Safe library deletion | HTTP | source file survives, membership reassigned, last-of-type protection, unknown ID |
 | Scanner | Rust + HTTP | incremental/full, locked correction preserved, target required, invalid roots/target, empty scan lifecycle, cancel |
 | Offline/unavailable roots | Rust + HTTP | prior entries preserved, availability unknown before check, missing-file errors |
-| Filename parsing | Rust | movie/year/release tags, SxxExx, NxNN, ranges, multi-episodes, folder context, extras |
+| Real-tree scanning | HTTP | Unicode names, deep nesting, ignored non-video files, symlink loops, unreadable folders, unchanged-file skipping, manual lock surviving a full rescan, removed media reported unavailable |
+| Manual override validation | Rust + HTTP | unknown kind, non-positive provider ID, control characters, oversized title/season/episodes rejected |
+| Temporary HLS cache | Rust | startup removes only idle, correctly named session directories |
+| API robustness | HTTP fuzz | no 500s, hangs or crashes for malformed bodies and queries on any route |
+| Filename parsing | Rust | movie/year/release tags, year-like titles (Blade Runner 2049, 2001), non-ASCII digits never panic, numeric titles after SxxExx are not ranges, SxxExx, NxNN, ranges, multi-episodes, folder context, extras |
 | Provider matching | Rust with cached fiction | exact/fuzzy titles, remakes, episode ambiguity, stale cache and no TMDB key |
 | Manual identification | Rust + HTTP + Chrome smoke | verified episode selection, lock persistence, malformed requests, review modal |
 | Collection grouping | Rust + JS + HTTP | provider collection dedup, numbered folders, unmatched extras, cached mapping |
@@ -91,3 +99,5 @@ Historical removed-feature tables in an upgraded database are left unused rather
 The reliability regressions additionally cover a manual lock arriving during scan identification, database rollback on simulated failures, concurrent login attempt updates, child process time/output limits, cancellation and reaping, preview cache bounds, reconnecting a file, and administrative polling under slow/failing responses. The full run is isolated and does not substitute for a multi-day production soak or device testing.
 
 Speech/conversion extensions: `python3 scripts/test.py --browser --speech` includes `tests/media-compatibility.py --speech`. Without `--speech`, the codec fixtures still run and the real speech stage is explicitly skipped. Actual speech testing requires local whisper-cli and the base model; use macOS say or set PLEXV2_SPEECH_FIXTURE to a clear speech WAV. Tests cover independently selected subtitle corrections, transformed seek coordinates, cancellation ownership, positive/negative offset and rate fits, ambiguous dialogue refusal, real transcription/cache invalidation, and decoded HLS/progressive output across five distinct input cases.
+
+Remote-access coverage: `tests/remote-access.py` starts a disposable server with a temporary trusted test certificate and verifies real TLS hostname/chain validation, Secure/HttpOnly cookies, HSTS, owner permissions, setup blocking, browser-origin rejection, owner disable through the remote connection, restart persistence, cleanup, and failure rollback. It never discovers a real router. Rust tests use an isolated SOAP router to verify finite lease creation/renewal/removal, permanent-lease rejection, and refusal to touch another application's or an expired lease's port. Hardware UPnP, actual WAN reachability, ACME renewal, CGNAT, and router interoperability require deployment testing. `scripts/test.py` includes both regression layers.

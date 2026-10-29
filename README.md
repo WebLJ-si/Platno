@@ -127,3 +127,11 @@ When a text subtitle is selected, automatic sync (enabled in profile settings) t
 **Compatibility mode** restarts playback at the current position using software H.264, 8-bit YUV 4:2:0, stereo 48 kHz AAC, timestamp recovery, and decoding from the beginning when input indexes cannot support seeking. Auto uses fixed 720p in this mode. The player tries software compatibility HLS before its progressive fallback. The scanner now recognizes additional FLV, Ogg video, MXF, VOB, 3GP, ASF and other common containers. Conversion can handle formats the installed FFmpeg decodes; it cannot recover encrypted/DRM media, a missing decoder, or irreparably damaged data. Source media is preserved.
 
 `python3 scripts/test.py --browser --speech` runs the complete tests including actual local speech inference. The optional speech fixture uses macOS `say`; on other hosts set `PLEXV2_SPEECH_FIXTURE` to a clear speech WAV. `tests/media-compatibility.py` checks decoded HLS/progressive output for AVI, FLV, VP9/Opus WebM, 10-bit H.264 and odd-sized silent video.
+
+### Remote access
+
+Owner-only **Settings → Remote access** offers a dedicated HTTPS listener with optional automatic UPnP forwarding. It stays off until enabled and requires a DNS hostname and trusted TLS certificate. Router leases are finite and renewed while running; disabling closes HTTPS and removes the owned mapping. See [the setup and troubleshooting guide](docs/remote-access.md). Never forward the ordinary HTTP port directly.
+
+### Beta diagnostics
+
+Stable/source builds send no telemetry by default. Clearly labeled diagnostic beta builds automatically report sanitized errors, process/session uptime, technical context and masked interface replay. They have visible disclosure and server/browser opt-outs. Read [BETA.md](BETA.md) before choosing or publishing a diagnostic beta. The independent [Observatory server](telemetry-server/README.md) is deployed separately on Vercel with private Redis storage and a single-owner Google login; no WebLJ Dash integration is required.

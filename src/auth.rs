@@ -158,6 +158,9 @@ pub(crate) fn principal(path: &PathBuf, headers: &HeaderMap) -> Option<Principal
 }
 
 pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Next) -> Response {
+    if !matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS) && !crate::remote_access::same_origin(req.headers()) {
+        return (StatusCode::FORBIDDEN, Json(json!({"error":"Cross-site changes are not permitted"}))).into_response();
+    }
     let uri = req.uri().path();
     let public = matches!(uri,"/"|"/help"|"/manifest.webmanifest"|"/sw.js"|"/offline.html") || uri.starts_with("/assets/") || matches!(uri, "/api/auth/setup-status" | "/api/auth/setup" | "/api/auth/login");
     if let Some(p) = principal(&path, req.headers()) {
@@ -166,7 +169,7 @@ pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Ne
             else { true };
         if !role_ok { return (StatusCode::FORBIDDEN, Json(json!({"error":"Your role cannot access this feature"}))).into_response(); }
         if p.role == "user" {
-            let allowed = public || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/metadata/detail" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
+            let allowed = public || uri.starts_with("/api/telemetry/") || uri.starts_with("/api/files") || uri.starts_with("/api/movie-collections") || uri.starts_with("/api/catalogue/") || uri.starts_with("/api/playback/") || uri.starts_with("/api/libraries") || uri.starts_with("/api/watchlist") || matches!(uri, "/api/server/info" | "/api/metadata/detail" | "/api/auth/sessions" | "/api/auth/me" | "/api/auth/logout" | "/api/auth/profile" | "/api/profiles" | "/api/user/settings");
             if !allowed { return (StatusCode::FORBIDDEN, Json(json!({"error":"User profiles can only browse and watch the library"}))).into_response(); }
         }
         req.extensions_mut().insert(p);
@@ -357,7 +360,11 @@ pub async fn server_info(State(app): State<App>) -> Json<Value> {
     Json(json!({"friendly_name":name}))
 }
 pub async fn server_settings(State(app): State<App>) -> Json<Value> {
-    let rows:Value=conn(&app.db).prepare("SELECT key,value FROM server_settings").and_then(|mut s|s.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map(|v|json!(v.into_iter().collect::<std::collections::HashMap<_,_>>())).unwrap_or(json!({})); Json(rows)
+    let rows:Value=conn(&app.db).prepare("SELECT key,value FROM server_settings").and_then(|mut s|s.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map(|v|json!(v.into_iter().collect::<std::collections::HashMap<_,_>>())).unwrap_or(json!({}));
+    let mut rows=rows;
+    rows["effective_transcode_dir"]=json!(crate::hls::work_root(&app));
+    rows["transcode_dir_from_environment"]=json!(std::env::var_os(crate::hls::WORK_DIR_ENV).is_some_and(|v|!v.is_empty()));
+    Json(rows)
 }
 pub async fn save_server_setting(State(app): State<App>, Json(input): Json<SettingInput>) -> Response {
     if input.key=="friendly_name" {
@@ -368,6 +375,11 @@ pub async fn save_server_setting(State(app): State<App>, Json(input): Json<Setti
     if input.key=="transcode_quality" {
         if !matches!(input.value.as_str(),"speed"|"balanced"|"quality") { return StatusCode::BAD_REQUEST.into_response(); }
         return match conn(&app.db).execute("INSERT INTO server_settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![input.key,input.value]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+    }
+    if input.key=="transcode_dir" {
+        if std::env::var_os(crate::hls::WORK_DIR_ENV).is_some_and(|v|!v.is_empty()) {return (StatusCode::CONFLICT,Json(json!({"error":"The folder is fixed by the SMART_MEDIA_TRANSCODE_DIR environment variable."}))).into_response()}
+        let stored=if input.value.trim().is_empty() {String::new()} else {match crate::hls::validate_work_dir(&app,&input.value) {Ok(path)=>path.to_string_lossy().into_owned(),Err(e)=>return (StatusCode::BAD_REQUEST,Json(json!({"error":e}))).into_response()}};
+        return match conn(&app.db).execute("INSERT INTO server_settings(key,value) VALUES('transcode_dir',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[stored]) { Ok(_)=>Json(json!({"ok":true,"effective_transcode_dir":crate::hls::work_root(&app)})).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() };
     }
     if input.key!="hardware_encoder"||input.value.len()>64{return StatusCode::BAD_REQUEST.into_response()}
     let available=crate::playback::available_h264_encoders().await;

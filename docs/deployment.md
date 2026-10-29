@@ -11,6 +11,8 @@ export PLEXV2_MEDIA_DIR=/absolute/path/to/media
 docker compose up -d --build
 ```
 
+Temporary conversion files (HLS segments, speech-sync scratch files) go to the system temp folder by default. Set `SMART_MEDIA_TRANSCODE_DIR` or use Settings → Conversion folder to put them on a faster or larger disk; in Docker, mount a volume there. Folders inside a media folder are refused, and orphaned session folders older than an hour are removed at startup.
+
 Open `http://127.0.0.1:8787`. Scan `/media` from Settings. The media mount is read-only; SQLite and private provider configuration are in the `plexv2-data` volume. The container runs as UID 10001: its media directory must be readable by that UID. When binding an existing data directory, make it writable by that UID too. Source paths imported from a host database must use the container's `/media` paths to play correctly. GPU pass-through is platform-specific; software conversion always remains available. Adaptive HLS encodes three renditions concurrently and needs more CPU than fixed quality.
 
 To update, pull the repository and run `docker compose up -d --build` again. Keep the data volume. Owner recovery uses `docker compose exec -it plexv2 smart-media-scanner reset-owner-password`. No public container registry image is published by this repository.
@@ -53,3 +55,7 @@ Create the service user and writable data directory first. Set `SMART_MEDIA_COOK
 ## Backup and recovery
 
 Stop the service before copying the entire data directory, including SQLite and private provider files, to access-controlled backup storage. Restore with the service stopped and preserve file ownership. Never copy only the SQLite file while it is live in WAL mode. Live database backup/restore from the UI is not implemented. The PWA offline page explains a lost connection; video downloads and offline viewing are not implemented.
+
+## Built-in HTTPS and UPnP
+
+The optional owner-controlled remote listener is separate from the HTTP/reverse-proxy deployment. It requires a reserved local IPv4 address, DNS hostname and externally issued/renewed trusted TLS certificate. Set `SMART_MEDIA_REMOTE_HOSTNAME`, `SMART_MEDIA_REMOTE_IP`, `SMART_MEDIA_REMOTE_PORT` (default 8943), `SMART_MEDIA_TLS_CERT`, and `SMART_MEDIA_TLS_KEY`, restart, then enable it in Settings. [Remote-access setup](remote-access.md) covers finite UPnP leases, manual rules, CGNAT, DNS, certificate renewal and testing from outside the LAN. Keep it disabled when a reverse proxy already handles public HTTPS; never forward port 8787 itself. Container deployments need explicit HTTPS port publishing and LAN multicast/router access for UPnP; those networking details are deployment-specific and have not been hardware-tested.

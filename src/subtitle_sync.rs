@@ -447,9 +447,11 @@ async fn run(
             }
         }
     }
+    let work_root = crate::hls::work_root(app);
+    let _ = std::fs::create_dir_all(&work_root);
     let temp = tempfile::Builder::new()
         .prefix("plexv2-subtitle-sync-")
-        .tempdir()
+        .tempdir_in(&work_root)
         .map_err(|_| "Cannot create private sync workspace")?;
     let mut subtitles = Command::new(playback::binary("ffmpeg"));
     subtitles
