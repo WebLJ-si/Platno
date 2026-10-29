@@ -13,7 +13,7 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicI64, AtomicU8, Ordering},
         Arc, LazyLock, Mutex, Once,
     },
     time::{Duration, Instant},
@@ -28,11 +28,18 @@ struct Session {
     last: Instant,
     stop: Option<oneshot::Sender<()>>,
     status: Arc<AtomicU8>,
+    ready_segments: usize,
+    requested: Arc<AtomicI64>,
 }
 static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static REAPER: Once = Once::new();
 const DIRECTORY_PREFIX: &str = "smart-media-hls-";
+// Segments (2 s each) kept in the playlist: the player may buffer 30 s ahead of what it plays, plus the paced lead below.
+const HLS_WINDOW: &str = "30";
+// FFmpeg is paused once this many segments are ready beyond the newest one the player has asked for, and resumed below RESUME.
+const LEAD_SEGMENTS: i64 = 5;
+const RESUME_SEGMENTS: i64 = 3;
 pub(crate) const WORK_DIR_ENV: &str = "SMART_MEDIA_TRANSCODE_DIR";
 // Scratch space for video conversion and speech-sync files: the environment wins over the
 // owner's saved setting, and the system temp folder is the default.
@@ -173,22 +180,32 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     if input.compatible.unwrap_or(false){encoder="libx264".into();}
     let mut command = Command::new(playback::binary("ffmpeg"));
     playback::conversion_input_options(&mut command,input.compatible.unwrap_or(false));
-    command.args(["-v","error","-nostdin","-re"]);
+    command.args(["-v","error","-nostdin"]);
+    // Unix: FFmpeg runs flat out and `pace` pauses it, so playback starts after the first two segments instead of six seconds
+    // of real time. Elsewhere FFmpeg itself is held to real time.
+    let paced=cfg!(unix);
+    if !paced {command.arg("-re");}
     if start>0. && !input.compatible.unwrap_or(false){command.args(["-ss",&format!("{start:.3}")]);}
     command.arg("-i").arg(&path);
     if start>0. && input.compatible.unwrap_or(false){command.args(["-ss",&format!("{start:.3}")]);}
     let adaptive=quality=="auto";
+    let compatible=input.compatible.unwrap_or(false);
+    let probe=playback::probe_file(&path).await.unwrap_or_default();
+    // Resuming mid-file needs frame-exact cuts, so only a start from the beginning can be repackaged.
+    let copy=!adaptive && !compatible && start==0. && hdr.is_empty()
+        && playback::video_bitrate(&app,tiers[0]).is_some_and(|(width,height,_)|playback::copyable_video(&probe,width,height));
     let mut master=String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
     for tier in tiers {
         let (width,height,rate)=playback::video_bitrate(&app,tier).unwrap();
         let scale=format!("{hdr}scale=w='min({width},iw)':h='min({height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
         let prefix=if adaptive {format!("v{tier}-")}else{String::new()};
         let playlist=if adaptive {format!("v{tier}.m3u8")}else{"index.m3u8".into()};
-        command.args(["-map","0:v:0","-map",&audio_map])
-            .args(playback::encoder_options(&encoder))
-            .args(["-pix_fmt","yuv420p","-vf",&scale,"-b:v",&rate,"-maxrate",&rate,"-bufsize","12000k",
-                   "-force_key_frames","expr:gte(t,n_forced*2)","-sc_threshold","0",
-                   "-c:a","aac","-ac","2","-ar","48000","-af","aresample=async=1:first_pts=0","-b:a","160k","-sn","-dn","-max_muxing_queue_size","2048","-f","hls","-hls_time","2","-hls_list_size","10",
+        command.args(["-map","0:v:0","-map",&audio_map]);
+        if copy {command.args(["-c:v","copy"]);} else {
+            command.args(playback::encoder_options(&encoder))
+                .args(["-pix_fmt","yuv420p","-vf",&scale,"-b:v",&rate,"-maxrate",&rate,"-bufsize","12000k","-force_key_frames","expr:gte(t,n_forced*2)","-sc_threshold","0"]);
+        }
+        command.args(["-c:a","aac","-ac","2","-ar","48000","-af","aresample=async=1:first_pts=0","-b:a","160k","-sn","-dn","-max_muxing_queue_size","2048","-f","hls","-hls_time","2","-hls_list_size",HLS_WINDOW,
                    "-hls_delete_threshold","3","-hls_flags","delete_segments+temp_file+independent_segments","-hls_segment_filename"])
             .arg(dir.join(format!("{prefix}segment%06d.ts"))).arg(dir.join(&playlist));
         let bandwidth=rate.trim_end_matches('k').parse::<u32>().unwrap_or(6000)*1200+192_000;
@@ -198,6 +215,7 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
         let _=tokio::fs::remove_dir_all(&dir).await;
         return error(StatusCode::INTERNAL_SERVER_ERROR,"Cannot create adaptive playlist");
     }
+    let requested=Arc::new(AtomicI64::new(-1));
     command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
     let mut child = match command.spawn() {
         Ok(c) => c,
@@ -206,17 +224,21 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
             return error(StatusCode::SERVICE_UNAVAILABLE, "FFmpeg is unavailable");
         }
     };
+    let pid = child.id();
     let (tx, rx) = oneshot::channel();
     let (done, finished) = oneshot::channel();
     let status = Arc::new(AtomicU8::new(0));
     let worker_status = status.clone();
+    let requested_by_player = requested.clone();
     SESSIONS.lock().unwrap().insert(id.clone(), Session {
-        profile_id: actor.profile_id, finished, dir:dir.clone(), last:Instant::now(), stop:Some(tx), status,
+        profile_id: actor.profile_id, finished, dir:dir.clone(), last:Instant::now(), stop:Some(tx), status, ready_segments:if paced {2} else {3}, requested:requested.clone(),
     });
     tokio::spawn(async move {
         // Retain the slot and files for completed short videos until stop/expiry.
         let mut rx=rx;
+        let pacing=async { match pid { Some(pid) if paced => pace(pid, dir.clone(), requested_by_player).await, _ => std::future::pending().await } };
         tokio::select! {
+            _=pacing=>{},
             result=child.wait()=>{worker_status.store(if result.is_ok_and(|s|s.success()){1}else{2},Ordering::Release); let _=rx.await;},
             _=&mut rx=>{let _=child.kill().await;worker_status.store(2,Ordering::Release);}
         }
@@ -233,20 +255,22 @@ pub async fn file(axum::Extension(actor): axum::Extension<crate::auth::Principal
     if !allowed_name(&name) {
         return error(StatusCode::NOT_FOUND, "Not found");
     }
-    let (dir, status) = {
+    let (dir, status, ready_segments) = {
         let mut sessions = SESSIONS.lock().unwrap();
         let Some(session) = sessions.get_mut(&id) else {
             return error(StatusCode::NOT_FOUND, "Playback session expired");
         };
         if session.profile_id!=actor.profile_id {return error(StatusCode::NOT_FOUND,"Playback session expired");}
         session.last = Instant::now();
-        (session.dir.clone(), session.status.clone())
+        if let Some(index)=segment_index(&name) { session.requested.fetch_max(index, Ordering::AcqRel); }
+        (session.dir.clone(), session.status.clone(), session.ready_segments)
     };
     let path = dir.join(&name);
     if name.ends_with(".m3u8") {
         for _ in 0..600 {
             match tokio::fs::read(&path).await {
-                Ok(content) if name=="master.m3u8" || playlist_ready(&content) => {
+                Ok(content) if name=="master.m3u8" || playlist_ready(&content, ready_segments) => {
+                    let content = if name=="master.m3u8" {content} else {start_from_beginning(content)};
                     return (
                         [
                             (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
@@ -277,14 +301,53 @@ pub async fn file(axum::Extension(actor): axum::Extension<crate::auth::Principal
     }
 }
 
-fn playlist_ready(content: &[u8]) -> bool {
+// The paced playlist can already hold a few segments when the player first loads it; without this hint it would join
+// "live" three segments from the end instead of at the start of the video.
+fn start_from_beginning(content: Vec<u8>) -> Vec<u8> {
+    const TAG_NAME: &[u8] = b"#EXT-X-START:";
+    const TAG: &[u8] = b"#EXT-X-START:TIME-OFFSET=0.0\n";
+    match content.strip_prefix(b"#EXTM3U\n") {
+        Some(rest) if !rest.windows(TAG_NAME.len()).any(|w| w == TAG_NAME) => [b"#EXTM3U\n", TAG, rest].concat(),
+        _ => content,
+    }
+}
+// `segment000012.ts` and `v720-segment000012.ts` are both segment 12.
+fn segment_index(name: &str) -> Option<i64> {
+    let digits = name.rsplit('-').next()?.strip_prefix("segment")?.strip_suffix(".ts")?;
+    digits.parse().ok()
+}
+fn newest_segment(dir: &std::path::Path) -> i64 {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().filter_map(|entry| segment_index(&entry.file_name().to_string_lossy())).max().unwrap_or(-1)
+}
+fn should_pause(paused: bool, ahead: i64) -> bool {
+    if paused { ahead > RESUME_SEGMENTS } else { ahead >= LEAD_SEGMENTS }
+}
+#[cfg(unix)]
+fn signal_transcoder(pid: u32, pause: bool) {
+    // SAFETY: plain kill(2) on the child this session spawned; a stale pid at worst reports ESRCH.
+    unsafe { libc::kill(pid as libc::pid_t, if pause { libc::SIGSTOP } else { libc::SIGCONT }); }
+}
+#[cfg(not(unix))]
+fn signal_transcoder(_pid: u32, _pause: bool) {}
+// Keeps FFmpeg a few segments ahead of the player so an idle or paused viewer costs no processor time.
+async fn pace(pid: u32, dir: PathBuf, requested: Arc<AtomicI64>) {
+    let mut paused = false;
+    loop {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let dir = dir.clone();
+        let newest = tokio::task::spawn_blocking(move || newest_segment(&dir)).await.unwrap_or(-1);
+        let pause = should_pause(paused, newest - requested.load(Ordering::Acquire));
+        if pause != paused { signal_transcoder(pid, pause); paused = pause; }
+    }
+}
+fn playlist_ready(content: &[u8], segments: usize) -> bool {
     let text = String::from_utf8_lossy(content);
     text.contains("#EXT-X-ENDLIST")
         || text
             .lines()
             .filter(|line| line.starts_with("#EXTINF:"))
             .count()
-            >= 3
+            >= segments
 }
 
 fn allowed_name(name: &str) -> bool {
@@ -297,12 +360,14 @@ mod tests {
     use super::*;
     #[test]
     fn waits_for_playable_live_playlist_or_finished_short_video() {
-        assert!(!playlist_ready(b"#EXTM3U\n#EXTINF:2,\nsegment000000.ts\n"));
+        assert!(!playlist_ready(b"#EXTM3U\n#EXTINF:2,\nsegment000000.ts\n", 3));
         assert!(playlist_ready(
-            b"#EXTM3U\n#EXTINF:2,\na.ts\n#EXTINF:2,\nb.ts\n#EXTINF:2,\nc.ts\n"
+            b"#EXTM3U\n#EXTINF:2,\na.ts\n#EXTINF:2,\nb.ts\n#EXTINF:2,\nc.ts\n", 3
         ));
+        assert!(!playlist_ready(b"#EXTM3U\n#EXTINF:2,\na.ts\n", 2));
+        assert!(playlist_ready(b"#EXTM3U\n#EXTINF:2,\na.ts\n#EXTINF:2,\nb.ts\n", 2));
         assert!(playlist_ready(
-            b"#EXTM3U\n#EXTINF:1,\na.ts\n#EXT-X-ENDLIST\n"
+            b"#EXTM3U\n#EXTINF:1,\na.ts\n#EXT-X-ENDLIST\n", 3
         ));
     }
     #[test]
@@ -320,6 +385,23 @@ mod tests {
         assert_eq!(remove_orphans(root.path(), Duration::from_secs(3600)), 1);
         assert!(!old.exists() && fresh.exists() && unrelated.exists());
         assert_eq!(remove_orphans(&root.path().join("missing"), Duration::ZERO), 0);
+    }
+    #[test]
+    fn pacing_pauses_ahead_of_the_player_and_resumes_with_hysteresis() {
+        assert!(!should_pause(false, LEAD_SEGMENTS - 1) && should_pause(false, LEAD_SEGMENTS));
+        assert!(should_pause(true, RESUME_SEGMENTS + 1) && !should_pause(true, RESUME_SEGMENTS));
+        assert_eq!((segment_index("segment000012.ts"), segment_index("v720-segment000003.ts"), segment_index("index.m3u8"), segment_index("segment1.ts.tmp")), (Some(12), Some(3), None, None));
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(newest_segment(dir.path()), -1);
+        for name in ["segment000000.ts", "segment000004.ts", "segment000005.ts.tmp", "v480-segment000007.ts"] { std::fs::write(dir.path().join(name), b"x").unwrap(); }
+        assert_eq!(newest_segment(dir.path()), 7);
+    }
+    #[test]
+    fn playlists_ask_to_start_at_the_beginning_once() {
+        let out = start_from_beginning(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\na.ts\n".to_vec());
+        assert!(out.starts_with(b"#EXTM3U\n#EXT-X-START:TIME-OFFSET=0.0\n#EXT-X-VERSION:3"));
+        assert_eq!(start_from_beginning(out.clone()), out);
+        assert_eq!(start_from_beginning(b"not a playlist".to_vec()), b"not a playlist");
     }
     #[test]
     fn only_playlist_and_numbered_segments_are_accessible() {

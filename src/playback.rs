@@ -97,17 +97,26 @@ pub(crate) fn binary(name: &str) -> String {
             name.to_owned()
         })
 }
+// Encoder detection and its smoke test cost a process each, so a stream start reuses the answers.
+static ENCODERS: tokio::sync::OnceCell<Vec<&'static str>> = tokio::sync::OnceCell::const_new();
+static ENCODER_TESTS: LazyLock<std::sync::Mutex<std::collections::HashMap<String, (bool, std::time::Instant)>>> = LazyLock::new(Default::default);
+const ENCODER_TEST_TTL: Duration = Duration::from_secs(600);
 pub async fn available_h264_encoders() -> Vec<&'static str> {
-    let Ok(output)=crate::processes::output(Command::new(binary("ffmpeg")).args(["-hide_banner","-encoders"]),Duration::from_secs(5),1_000_000).await else{return vec!["libx264"]};
-    let text=String::from_utf8_lossy(&output.stdout).to_string()+&String::from_utf8_lossy(&output.stderr);
-    ["libx264","h264_videotoolbox","h264_nvenc","h264_qsv"].into_iter().filter(|name|text.lines().any(|line|line.split_whitespace().any(|word|word==*name))).collect()
+    ENCODERS.get_or_init(|| async {
+        let Ok(output)=crate::processes::output(Command::new(binary("ffmpeg")).args(["-hide_banner","-encoders"]),Duration::from_secs(5),1_000_000).await else{return vec!["libx264"]};
+        let text=String::from_utf8_lossy(&output.stdout).to_string()+&String::from_utf8_lossy(&output.stderr);
+        ["libx264","h264_videotoolbox","h264_nvenc","h264_qsv"].into_iter().filter(|name|text.lines().any(|line|line.split_whitespace().any(|word|word==*name))).collect()
+    }).await.clone()
 }
 pub(crate) async fn encoder_works(encoder: &str) -> bool {
+    if let Some((ok,at))=ENCODER_TESTS.lock().unwrap().get(encoder).copied() { if at.elapsed()<ENCODER_TEST_TTL {return ok;} }
     let mut cmd=Command::new(binary("ffmpeg"));
     cmd.args(["-v","error","-nostdin","-f","lavfi","-i","color=c=black:s=64x64:d=0.04","-frames:v","1","-an","-c:v",encoder]);
     match encoder { "h264_nvenc"=>{cmd.args(["-preset","p4"]);},"h264_qsv"=>{cmd.args(["-preset","veryfast"]);},"h264_videotoolbox"=>{cmd.args(["-realtime","1","-allow_sw","1"]);},_=>{cmd.args(["-preset","ultrafast"]);} }
     cmd.args(["-f","null","-"]);
-    matches!(crate::processes::output(&mut cmd,Duration::from_secs(4),100_000).await,Ok(result) if result.status.success())
+    let ok=matches!(crate::processes::output(&mut cmd,Duration::from_secs(4),100_000).await,Ok(result) if result.status.success());
+    ENCODER_TESTS.lock().unwrap().insert(encoder.to_string(),(ok,std::time::Instant::now()));
+    ok
 }
 pub async fn h264_encoder(app: &App) -> (String, Vec<&'static str>) {
     let available=available_h264_encoders().await;
@@ -123,9 +132,30 @@ pub fn encoder_options(encoder: &str) -> Vec<String> {
 }
 const DRIVE_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(180);
+// One ffprobe of a large file on a NAS can take seconds; starting a stream reads it several times.
+static PROBES: LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, (String, Value)>>> = LazyLock::new(Default::default);
 pub(crate) async fn probe_file(path: &std::path::Path) -> Result<Value, String> {
-    probe_file_with(path, &binary("ffprobe")).await
+    let signature=match tokio::time::timeout(Duration::from_secs(2),tokio::fs::metadata(path)).await {
+        Ok(Ok(m))=>Some(format!("{}:{}",m.len(),m.modified().ok().and_then(|t|t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0,|t|t.as_nanos()))),
+        _=>None,
+    };
+    if let Some(sig)=&signature { if let Some((cached,data))=PROBES.lock().unwrap().get(path) { if cached==sig {return Ok(data.clone());} } }
+    let data=probe_file_with(path, &binary("ffprobe")).await?;
+    if let Some(sig)=signature { let mut probes=PROBES.lock().unwrap(); if probes.len()>=128 {probes.clear();} probes.insert(path.to_path_buf(),(sig,data.clone())); }
+    Ok(data)
 }
+// Streams that browsers already decode are repackaged instead of re-encoded: no CPU cost and no quality loss.
+pub(crate) fn copyable_video(probe:&Value,max_width:u32,max_height:u32)->bool{
+    let streams=probe["streams"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let Some(video)=streams.iter().find(|x|x["codec_type"]=="video") else{return false};
+    let bit_rate=probe["format"]["bit_rate"].as_str().and_then(|v|v.parse::<u64>().ok());
+    video["codec_name"]=="h264" && video["pix_fmt"]=="yuv420p"
+        && video["width"].as_u64().is_some_and(|w|w>0&&w<=max_width as u64) && video["height"].as_u64().is_some_and(|h|h>0&&h<=max_height as u64)
+        && !matches!(video["color_transfer"].as_str(),Some("smpte2084"|"arib-std-b67"))
+        && bit_rate.is_some_and(|b|b<=COPY_MAX_BIT_RATE)
+}
+// Above this a home network or phone connection struggles with the unconverted stream.
+const COPY_MAX_BIT_RATE: u64 = 16_000_000;
 async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value, String> {
     let _permit=PROBE_LIMIT.clone().try_acquire_owned().map_err(|_| "Media information slots are busy. Try again shortly.".to_string())?;
     match tokio::time::timeout(DRIVE_OPEN_TIMEOUT, tokio::fs::File::open(path)).await {

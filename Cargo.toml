@@ -25,3 +25,6 @@ tempfile = "3"
 igd-next = { version = "0.17.1", features = ["aio_tokio"] }
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -3,6 +3,13 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
+## [Unreleased]
+
+### Faster video start
+- Converted videos start in well under a second of waiting instead of about six (measured on a fast machine; a slow NAS processor is now the only limit). FFmpeg runs ahead of the player and is paused a few segments in front of it, so an idle or paused viewer costs no processor time. On Windows FFmpeg is still held to real time.
+- H.264 videos that a browser already decodes (up to the chosen quality and 16 Mbit/s) are repackaged instead of re-encoded when playback starts from the beginning, which takes almost no processor time on a NAS.
+- The encoder check and the media information of a file are remembered, so starting a video no longer runs several extra FFmpeg and ffprobe processes.
+
 ## [0.1.0]
 
 First public release.

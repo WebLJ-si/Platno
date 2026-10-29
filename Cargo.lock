@@ -1367,6 +1367,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "igd-next",
+ "libc",
  "regex",
  "reqwest",
  "ring",
