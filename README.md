@@ -57,7 +57,7 @@ Then open **http://127.0.0.1:8787**, create the owner account and follow the gui
 ```yaml
 services:
   platno:
-    image: ghcr.io/weblj-si/platno:latest
+    image: weblj/platno:latest
     restart: unless-stopped
     ports:
       - "127.0.0.1:8787:8787"
@@ -68,7 +68,7 @@ volumes:
   platno-data:
 ```
 
-Start it with `docker compose up -d`. The container runs as UID 10001, so your media must be readable by that user. Update with `docker compose pull && docker compose up -d`. Each release page lists every Docker setting. Building the image yourself from this checkout: `docker compose up -d --build` (see [docs/deployment.md](docs/deployment.md)).
+The image is on [Docker Hub](https://hub.docker.com/r/weblj/platno) (`weblj/platno`, amd64 and arm64) and also on GitHub Container Registry (`ghcr.io/weblj-si/platno`). Start it with `docker compose up -d`. The container runs as UID 10001, so your media must be readable by that user. Update with `docker compose pull && docker compose up -d`. Each release page lists every Docker setting. Building the image yourself from this checkout: `docker compose up -d --build` (see [docs/deployment.md](docs/deployment.md)).
 
 ### Updating
 

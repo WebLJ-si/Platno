@@ -16,7 +16,7 @@ Pushing a tag `vX.Y.Z` (the tag must equal the version in `Cargo.toml`) runs `.g
 1. Builds static programs for Linux x86_64 and ARM64 (musl), a universal macOS program, and Windows x86_64.
 2. Builds `platno_X.Y.Z_amd64.deb` and `_arm64.deb` and installs each in a clean Debian to prove they work.
 3. Creates archives (`.tar.gz`, `.zip`), the bare programs the in-app updater downloads, `install.sh`, and `SHA256SUMS`.
-4. Assembles the multi-architecture Docker image from those programs and pushes `ghcr.io/weblj-si/platno:X.Y.Z` and `:latest` (also Docker Hub when the repository has `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets).
+4. Assembles the multi-architecture Docker image from those programs and pushes `ghcr.io/weblj-si/platno:X.Y.Z` and `:latest` and, when the repository has the secrets `DOCKERHUB_USERNAME` (`weblj`) and `DOCKERHUB_TOKEN` (a Docker Hub access token with write rights), `weblj/platno` on Docker Hub too. Without those secrets publish Docker Hub by hand after the release: download `platno-X.Y.Z-linux-x86_64` and `-aarch64` into `docker-bin/` as `platno-linux-amd64` and `platno-linux-arm64`, then `docker buildx build -f Dockerfile.release --platform linux/amd64,linux/arm64 -t weblj/platno:X.Y.Z -t weblj/platno:latest --push .`. New GHCR packages start private: make `platno` public once in the package settings.
 5. Creates the GitHub release with notes written by `scripts/release_notes.py`: the changelog section, a download table, every Docker setting, update and verification instructions.
 
 A tag with a hyphen (`v0.2.0-rc.1`) is published as a pre-release and does not become `latest`.

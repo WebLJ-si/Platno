@@ -1,7 +1,7 @@
 services:
   platno:
     # `docker compose up -d --build` builds this checkout; `docker compose pull` uses a published image.
-    image: ${PLEXV2_IMAGE:-ghcr.io/weblj-si/platno:latest}
+    image: ${PLEXV2_IMAGE:-weblj/platno:latest}
     build: .
     restart: unless-stopped
     ports:

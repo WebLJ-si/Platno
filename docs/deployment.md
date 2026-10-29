@@ -18,14 +18,14 @@ The host port defaults to 8787; set `PLEXV2_PORT` if another program already use
 Open `http://127.0.0.1:8787`. Scan `/media` from Settings. The media mount is read-only; SQLite and private provider configuration are in the `platno-data` volume. The container runs as UID 10001: its media directory must be readable by that UID. When binding an existing data directory, make it writable by that UID too. Source paths imported from a host database must use the container's `/media` paths to play correctly. GPU pass-through is platform-specific; software conversion always remains available. Adaptive HLS encodes three renditions concurrently and needs more CPU than fixed quality.
 
 To update, pull the repository and run `docker compose up -d --build` again. Keep the data volume. Owner recovery uses `docker compose exec -it platno smart-media-scanner reset-owner-password`. 
-### Publishing the image
+### Published images
 
-Nothing is published automatically. To share a ready-made image, pick one registry:
+Release images are published for `linux/amd64` and `linux/arm64`:
 
-- **GitHub Container Registry (recommended for this repository).** `.github/workflows/docker.yml` builds a `linux/amd64` + `linux/arm64` image and pushes `ghcr.io/weblj-si/platno` when you push a version tag such as `v0.2.0` (or run the workflow manually). It needs no secrets. Afterwards set the package to public in the repository's Packages settings so others can pull without signing in.
-- **Docker Hub.** `docker login`, then `docker buildx build --platform linux/amd64,linux/arm64 -t YOUR_NAME/platno:0.2.0 -t YOUR_NAME/platno:latest --push .`. Images go in your own namespace. The bare `library/` namespace on Docker Hub is reserved for Docker Official Images, which Docker's team reviews through the `docker-library` GitHub project; a personal project normally does not qualify.
+- **Docker Hub:** [`weblj/platno`](https://hub.docker.com/r/weblj/platno), the default in `compose.yaml`.
+- **GitHub Container Registry:** `ghcr.io/weblj-si/platno`, pushed by the release workflow (`.github/workflows/release.yml`). A new package starts private; make it public once in the package settings.
 
-Others can then use the image with Compose without building it: set `PLEXV2_IMAGE=ghcr.io/weblj-si/platno:latest` (the default in `compose.yaml`), set `PLEXV2_MEDIA_DIR`, and run `docker compose pull && docker compose up -d`. Use `docker compose up -d --build` to build your own checkout instead. The image contains FFmpeg and runs as UID 10001; GPU encoders are not available inside it (software conversion is used).
+Use them without building: `docker compose pull && docker compose up -d` (set `PLEXV2_MEDIA_DIR`, and `PLEXV2_IMAGE` to pick another image or a version tag). Build your own checkout instead with `docker compose up -d --build`. How releases and the Docker Hub push work is described in [releasing.md](releasing.md). The image contains FFmpeg and runs as UID 10001; GPU encoders are not available inside it (software conversion is used).
 
 ## HTTPS reverse proxy
 

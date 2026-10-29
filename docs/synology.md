@@ -10,7 +10,7 @@ The supported way is **Docker** through Container Manager (DSM 7.2 or newer; on 
    ```yaml
    services:
      platno:
-       image: ghcr.io/weblj-si/platno:latest
+       image: weblj/platno:latest
        restart: unless-stopped
        ports:
          - "8787:8787"

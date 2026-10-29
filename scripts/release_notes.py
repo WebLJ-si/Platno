@@ -24,7 +24,8 @@ def notes(version, repo, hub):
     stable = '-' not in version
     tag = version
     files = lambda suffix, ext='': f'platno-{version}-{suffix}{ext}'
-    hub_line = f'\nDocker Hub: `{hub}/platno:{tag}`' if hub else ''
+    image = f'{hub}/platno' if hub else ghcr
+    hub_line = f'\nAlso on GitHub Container Registry: `{ghcr}:{tag}`' if hub else ''
     return f'''# Platno {version}
 
 {changelog(version)}
@@ -52,7 +53,7 @@ your media folders (for example `sudo setfacl -R -m u:platno:rX /path/to/media`)
 
 ## Docker{' (this release)' if stable else ''}
 
-Image: `{ghcr}:{tag}`{'' if not stable else f' (also `{ghcr}:latest`)'}{hub_line}
+Image: `{image}:{tag}`{'' if not stable else f' (also `{image}:latest`)'}{hub_line}
 Architectures: `linux/amd64` and `linux/arm64`.
 
 What you have to set:
@@ -70,7 +71,7 @@ What you have to set:
 ```yaml
 services:
   platno:
-    image: {ghcr}:{tag}
+    image: {image}:{tag}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8787:8787"
@@ -114,6 +115,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('version')
     parser.add_argument('--repo', default='WebLJ-si/Platno')
-    parser.add_argument('--hub', default='')
+    parser.add_argument('--hub', default='weblj')
     args = parser.parse_args()
     print(notes(args.version.lstrip('v'), args.repo, args.hub))
