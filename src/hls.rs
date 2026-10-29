@@ -14,7 +14,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicU8, Ordering},
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, Once,
     },
     time::{Duration, Instant},
 };
@@ -23,7 +23,7 @@ use tokio_util::io::ReaderStream;
 
 struct Session {
     profile_id: i64,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    finished: oneshot::Receiver<()>,
     dir: PathBuf,
     last: Instant,
     stop: Option<oneshot::Sender<()>>,
@@ -31,7 +31,14 @@ struct Session {
 }
 static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static HLS_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(||Arc::new(tokio::sync::Semaphore::new(4)));
+static REAPER: Once = Once::new();
+// Cancelling setup must not leave a temporary streaming directory behind.
+struct StreamingDir(Option<PathBuf>);
+impl Drop for StreamingDir {
+    fn drop(&mut self) {
+        if let Some(dir)=self.0.take() {tokio::spawn(async move {let _=tokio::fs::remove_dir_all(dir).await;});}
+    }
+}
 #[derive(Deserialize)]
 pub struct Start {
     path: String,
@@ -46,22 +53,38 @@ pub struct Stop {
 fn error(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({"error":msg}))).into_response()
 }
-fn remove(id: &str) {
+async fn remove(id: &str) {
     let session = SESSIONS.lock().unwrap().remove(id);
     if let Some(mut session) = session {
-        if let Some(sender) = session.stop.take() {
-            let _ = sender.send(());
-        }
-        let dir = session.dir;
-        tokio::spawn(async move {
-            let _ = tokio::fs::remove_dir_all(dir).await;
-        });
+        if let Some(sender)=session.stop.take() {let _=sender.send(());}
+        let _=session.finished.await;
     }
+}
+pub async fn shutdown_all() {
+    let ids:Vec<_>=SESSIONS.lock().unwrap().keys().cloned().collect();
+    for id in ids {remove(&id).await;}
+}
+fn start_reaper() {
+    REAPER.call_once(|| {tokio::spawn(async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            // Remove and signal under the same lock as file()'s last-access update.
+            let stale:Vec<_>={
+                let mut sessions=SESSIONS.lock().unwrap();
+                let ids:Vec<_>=sessions.iter().filter(|(_,s)|s.last.elapsed()>Duration::from_secs(150)).map(|(id,_)|id.clone()).collect();
+                ids.into_iter().filter_map(|id|sessions.remove(&id)).collect()
+            };
+            for mut session in stale {
+                if let Some(sender)=session.stop.take() {let _=sender.send(());}
+                let _=session.finished.await;
+            }
+        }
+    });});
 }
 pub async fn stop(axum::Extension(actor): axum::Extension<crate::auth::Principal>, Json(input): Json<Stop>) -> Response {
     let owned=SESSIONS.lock().unwrap().get(&input.id).is_some_and(|s|s.profile_id==actor.profile_id);
     if !owned {return error(StatusCode::NOT_FOUND,"Playback session expired");}
-    remove(&input.id);
+    remove(&input.id).await;
     Json(json!({"ok":true})).into_response()
 }
 pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extension<crate::auth::Principal>, Json(input): Json<Start>) -> Response {
@@ -75,8 +98,8 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     let quality=input.quality.as_deref().unwrap_or("1080");
     let tiers: Vec<&str> = if quality=="auto" {vec!["480","720","1080"]} else {vec![quality]};
     if tiers.iter().any(|q|playback::video_bitrate(&app,q).is_none()) { return error(StatusCode::BAD_REQUEST,"Invalid quality"); }
+    let Ok(permit)=playback::CONVERSION_LIMIT.clone().try_acquire_owned() else {return error(StatusCode::TOO_MANY_REQUESTS,"All four conversion slots are busy. Try again shortly.");};
     let audio_map = match playback::audio_map(&path, input.audio).await { Ok(v)=>v, Err(e)=>return error(StatusCode::BAD_REQUEST,&e) };
-    let Ok(permit)=HLS_LIMIT.clone().try_acquire_owned() else {return error(StatusCode::TOO_MANY_REQUESTS,"All four HLS conversion slots are busy. Try again shortly.");};
     use ring::rand::SecureRandom;
     let mut random=[0u8;32];
     if ring::rand::SystemRandom::new().fill(&mut random).is_err() {return error(StatusCode::INTERNAL_SERVER_ERROR,"Cannot create playback session");}
@@ -88,6 +111,7 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
             "Cannot create streaming cache",
         );
     }
+    let mut directory=StreamingDir(Some(dir.clone()));
     let hdr=match playback::hdr_filter(&path).await {Ok(v)=>v,Err(e)=>{let _=tokio::fs::remove_dir_all(&dir).await;return error(StatusCode::BAD_GATEWAY,&e)}};
     let (encoder,_available)=playback::h264_encoder(&app).await;
     let mut command = Command::new(playback::binary("ffmpeg"));
@@ -122,40 +146,26 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
         }
     };
     let (tx, rx) = oneshot::channel();
+    let (done, finished) = oneshot::channel();
     let status = Arc::new(AtomicU8::new(0));
     let worker_status = status.clone();
-    tokio::spawn(async move {
-        tokio::select! { result=child.wait()=>{worker_status.store(if result.is_ok_and(|s|s.success()){1}else{2},Ordering::Release)}, _=rx=>{let _=child.kill().await;worker_status.store(2,Ordering::Release)} }
+    SESSIONS.lock().unwrap().insert(id.clone(), Session {
+        profile_id: actor.profile_id, finished, dir:dir.clone(), last:Instant::now(), stop:Some(tx), status,
     });
-    SESSIONS.lock().unwrap().insert(
-        id.clone(),
-        Session {
-            profile_id: actor.profile_id,
-            _permit: permit,
-            dir,
-            last: Instant::now(),
-            stop: Some(tx),
-            status,
-        },
-    );
     tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            let stale: Vec<String> = SESSIONS
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(_, s)| s.last.elapsed() > Duration::from_secs(150))
-                .map(|(id, _)| id.clone())
-                .collect();
-            for id in stale {
-                remove(&id)
-            }
-            if SESSIONS.lock().unwrap().is_empty() {
-                break;
-            }
+        // Retain the slot and files for completed short videos until stop/expiry.
+        let mut rx=rx;
+        tokio::select! {
+            result=child.wait()=>{worker_status.store(if result.is_ok_and(|s|s.success()){1}else{2},Ordering::Release); let _=rx.await;},
+            _=&mut rx=>{let _=child.kill().await;worker_status.store(2,Ordering::Release);}
         }
+        let _=child.wait().await;
+        let _=tokio::fs::remove_dir_all(&dir).await;
+        directory.0.take();
+        drop(permit);
+        let _=done.send(());
     });
+    start_reaper();
     Json(json!({"id":id,"adaptive":adaptive,"url":format!("/api/playback/hls/{id}/{}",if adaptive {"master.m3u8"}else{"index.m3u8"})})).into_response()
 }
 pub async fn file(axum::Extension(actor): axum::Extension<crate::auth::Principal>, Path((id, name)): Path<(String, String)>) -> Response {

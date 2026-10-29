@@ -14,6 +14,11 @@ use tokio::{
     process::Command,
 };
 use tokio_util::io::ReaderStream;
+use std::sync::{Arc, LazyLock};
+pub(crate) static CONVERSION_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+static DIRECT_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(64)));
+static PROBE_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(8)));
+static SUBTITLE_LIMIT: LazyLock<Arc<tokio::sync::Semaphore>> = LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
 
 #[derive(Deserialize)]
 pub struct MediaQuery {
@@ -74,7 +79,7 @@ pub(crate) fn binary(name: &str) -> String {
         })
 }
 pub async fn available_h264_encoders() -> Vec<&'static str> {
-    let Ok(output)=Command::new(binary("ffmpeg")).args(["-hide_banner","-encoders"]).output().await else{return vec!["libx264"]};
+    let Ok(output)=crate::processes::output(Command::new(binary("ffmpeg")).args(["-hide_banner","-encoders"]),Duration::from_secs(5),1_000_000).await else{return vec!["libx264"]};
     let text=String::from_utf8_lossy(&output.stdout).to_string()+&String::from_utf8_lossy(&output.stderr);
     ["libx264","h264_videotoolbox","h264_nvenc","h264_qsv"].into_iter().filter(|name|text.lines().any(|line|line.split_whitespace().any(|word|word==*name))).collect()
 }
@@ -83,7 +88,7 @@ async fn encoder_works(encoder: &str) -> bool {
     cmd.args(["-v","error","-nostdin","-f","lavfi","-i","color=c=black:s=64x64:d=0.04","-frames:v","1","-an","-c:v",encoder]);
     match encoder { "h264_nvenc"=>{cmd.args(["-preset","p4"]);},"h264_qsv"=>{cmd.args(["-preset","veryfast"]);},"h264_videotoolbox"=>{cmd.args(["-realtime","1","-allow_sw","1"]);},_=>{cmd.args(["-preset","ultrafast"]);} }
     cmd.args(["-f","null","-"]);
-    matches!(tokio::time::timeout(Duration::from_secs(4),cmd.output()).await,Ok(Ok(result)) if result.status.success())
+    matches!(crate::processes::output(&mut cmd,Duration::from_secs(4),100_000).await,Ok(result) if result.status.success())
 }
 pub async fn h264_encoder(app: &App) -> (String, Vec<&'static str>) {
     let available=available_h264_encoders().await;
@@ -103,6 +108,7 @@ async fn probe_file(path: &std::path::Path) -> Result<Value, String> {
     probe_file_with(path, &binary("ffprobe")).await
 }
 async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value, String> {
+    let _permit=PROBE_LIMIT.clone().try_acquire_owned().map_err(|_| "Media information slots are busy. Try again shortly.".to_string())?;
     match tokio::time::timeout(DRIVE_OPEN_TIMEOUT, tokio::fs::File::open(path)).await {
         Err(_) => {
             return Err(
@@ -124,8 +130,7 @@ async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value,
         }
         Ok(Ok(_)) => {}
     }
-    let output = tokio::time::timeout(
-        PROBE_TIMEOUT,
+    let output = crate::processes::output(
         Command::new(ffprobe)
             .args([
                 "-v",
@@ -135,15 +140,10 @@ async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value,
                 "-of",
                 "json",
             ])
-            .arg(path)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| {
-        "Reading video information timed out. The drive may be slow or disconnected".to_string()
-    })?
-    .map_err(|_| "ffprobe is unavailable; install FFmpeg and ffprobe".to_string())?;
+            .arg(path), PROBE_TIMEOUT, 2_000_000).await.map_err(|e| {
+            if e.kind()==std::io::ErrorKind::TimedOut {"Reading video information timed out. The drive may be slow or disconnected".to_string()}
+            else {"ffprobe is unavailable or returned excessive output; install FFmpeg and ffprobe".to_string()}
+        })?;
     if !output.status.success() {
         return Err("Could not read this video; check that the drive is available".into());
     }
@@ -161,14 +161,12 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                 m.modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|t| t.as_secs())
+                    .map(|t| t.as_nanos())
                     .unwrap_or(0)
             )),
             _ => None,
         };
-    let cache_key = signature
-        .as_ref()
-        .map(|v| format!("playback:probe:v3:{}:{}", q.path, v));
+    let cache_key = signature.as_ref().map(|_| format!("playback:probe:v4:{}", q.path));
     let cached_data = cache_key
         .as_ref()
         .and_then(|key| {
@@ -178,7 +176,9 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                 })
                 .ok()
         })
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .filter(|value| value["signature"].as_str()==signature.as_deref())
+        .map(|value| value["probe"].clone());
     let probed = if let Some(data) = cached_data {
         Ok(data)
     } else {
@@ -186,7 +186,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
         if let (Some(key), Ok(data)) = (&cache_key, &result) {
             let _ = db(&app).execute(
                 "INSERT OR REPLACE INTO cache VALUES(?1,?2,?3)",
-                rusqlite::params![key, data.to_string(), chrono::Utc::now().timestamp()],
+                rusqlite::params![key, json!({"signature":signature,"probe":data}).to_string(), chrono::Utc::now().timestamp()],
             );
         }
         result
@@ -271,9 +271,11 @@ pub async fn direct(
     let Some(path) = library_path(&app, &q.path) else {
         return fail(StatusCode::NOT_FOUND, "File is not in the library");
     };
-    let mut file = match tokio::fs::File::open(path).await {
-        Ok(v) => v,
-        Err(_) => return fail(StatusCode::NOT_FOUND, "The video file is unavailable"),
+    let Ok(permit)=DIRECT_LIMIT.clone().try_acquire_owned() else {return fail(StatusCode::TOO_MANY_REQUESTS,"File streaming slots are busy. Try again shortly.");};
+    let mut file=match tokio::time::timeout(DRIVE_OPEN_TIMEOUT,tokio::fs::File::open(path)).await {
+        Ok(Ok(file))=>file,
+        Err(_)=>return fail(StatusCode::GATEWAY_TIMEOUT,"The video drive is not responding"),
+        _=>return fail(StatusCode::NOT_FOUND,"The video file is unavailable"),
     };
     let size = match file.metadata().await {
         Ok(v) => v.len(),
@@ -315,11 +317,8 @@ pub async fn direct(
     if range.is_some() {
         response = response.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
     }
-    response
-        .body(Body::from_stream(ReaderStream::new(
-            file.take(end - start + 1),
-        )))
-        .unwrap()
+    let stream=async_stream::stream! {let _permit=permit;let mut reader=ReaderStream::new(file.take(end-start+1));use futures_util::StreamExt;while let Some(item)=reader.next().await {yield item;}};
+    response.body(Body::from_stream(stream)).unwrap()
 }
 pub(crate) async fn hdr_filter(path: &std::path::Path) -> Result<String, String> {
     let data=probe_file(path).await?;
@@ -341,6 +340,7 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
     if !start.is_finite() || !(0.0..=1_000_000.0).contains(&start) {
         return fail(StatusCode::BAD_REQUEST, "Invalid playback position");
     }
+    let Ok(permit)=CONVERSION_LIMIT.clone().try_acquire_owned() else {return fail(StatusCode::TOO_MANY_REQUESTS,"All four conversion slots are busy. Try again shortly.");};
     if tokio::fs::metadata(&path).await.is_err() {
         return fail(StatusCode::NOT_FOUND, "The video file is unavailable");
     }
@@ -404,7 +404,8 @@ pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> R
         }
     };
     let stdout = child.stdout.take().unwrap();
-    let stream = async_stream::stream! { let _child=child; let mut reader=ReaderStream::new(stdout); use futures_util::StreamExt; while let Some(item)=reader.next().await { yield item; } };
+    let managed=crate::processes::ManagedChild::new(child, Some(permit));
+    let stream = async_stream::stream! { let _child=managed; let mut reader=ReaderStream::new(stdout); use futures_util::StreamExt; while let Some(item)=reader.next().await { yield item; } };
     let mut response = Response::new(Body::from_stream(stream));
     response
         .headers_mut()
@@ -442,6 +443,7 @@ fn is_text_subtitle(name: &str) -> bool {
         })
 }
 pub async fn subtitle(State(app): State<App>, Query(q): Query<MediaQuery>) -> Response {
+    let Ok(permit)=SUBTITLE_LIMIT.clone().try_acquire_owned() else {return fail(StatusCode::TOO_MANY_REQUESTS,"Subtitle conversion slots are busy. Try again shortly.");};
     let Some(path) = library_path(&app, &q.path) else {
         return fail(StatusCode::NOT_FOUND, "File is not in the library");
     };
@@ -504,22 +506,17 @@ pub async fn subtitle(State(app): State<App>, Query(q): Query<MediaQuery>) -> Re
             Err(_) => return fail(StatusCode::SERVICE_UNAVAILABLE, "FFmpeg is unavailable"),
         };
         let stdout = child.stdout.take().unwrap();
-        let stream = async_stream::stream! { let _child=child; let mut reader=ReaderStream::new(stdout); use futures_util::StreamExt; while let Some(item)=reader.next().await {yield item;} };
+        let managed=crate::processes::ManagedChild::new(child, Some(permit));
+        let stream = async_stream::stream! { let _child=managed; let mut reader=ReaderStream::new(stdout); use futures_util::StreamExt; while let Some(item)=reader.next().await {yield item;} };
         return Response::builder()
             .header(header::CONTENT_TYPE, "text/vtt; charset=utf-8")
             .header(header::CACHE_CONTROL, "no-store")
             .body(Body::from_stream(stream))
             .unwrap();
     }
-    let output = tokio::time::timeout(
-        Duration::from_secs(30),
-        cmd.args(["-f", "webvtt", "pipe:1"])
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await;
+    let output = crate::processes::output(cmd.args(["-f", "webvtt", "pipe:1"]), Duration::from_secs(30), 5_000_000).await;
     match output {
-        Ok(Ok(data)) if data.status.success() && data.stdout.len() <= 5_000_000 => (
+        Ok(data) if data.status.success() && data.stdout.len() <= 5_000_000 => (
             [
                 (header::CONTENT_TYPE, "text/vtt; charset=utf-8"),
                 (header::CACHE_CONTROL, "no-store"),

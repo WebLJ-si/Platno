@@ -6,8 +6,8 @@ use std::time::Duration;
 async fn version(name: &str) -> Value {
     let mut cmd = tokio::process::Command::new(playback::binary(name));
     cmd.arg("-version").kill_on_drop(true);
-    match tokio::time::timeout(Duration::from_secs(5), cmd.output()).await {
-        Ok(Ok(v)) if v.status.success() => {
+    match crate::processes::output(&mut cmd,Duration::from_secs(5),100_000).await {
+        Ok(v) if v.status.success() => {
             json!({"available":true,"version":String::from_utf8_lossy(&v.stdout).lines().next().unwrap_or("")})
         }
         _ => json!({"available":false}),
@@ -68,6 +68,6 @@ pub async fn health(State(app): State<App>) -> Json<Value> {
         .collect()
         .await;
     Json(
-        json!({"ffmpeg":ffmpeg,"ffprobe":ffprobe,"tmdb_configured":!crate::tmdb_token(&app).is_empty(),"directories":directories,"files":rows.len(),"total_bytes":rows.iter().map(|(_,s,_)|*s).sum::<i64>(),"needs_attention":attention,"largest_files":largest}),
+        json!({"ffmpeg":ffmpeg,"ffprobe":ffprobe,"tmdb_configured":!crate::tmdb_token(&app).is_empty(),"directories":directories,"files":rows.len(),"total_bytes":rows.iter().fold(0i64,|total,(_,s,_)|total.saturating_add((*s).max(0))),"needs_attention":attention,"largest_files":largest}),
     )
 }

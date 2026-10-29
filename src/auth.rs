@@ -15,6 +15,7 @@ use std::{num::NonZeroU32, path::PathBuf, time::Duration};
 use crate::App;
 
 const ROUNDS: u32 = 600_000;
+static CRYPTO_LIMIT: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> = std::sync::LazyLock::new(||std::sync::Arc::new(tokio::sync::Semaphore::new(8)));
 const SESSION_DAYS: i64 = 30;
 const COOKIE: &str = "smart_media_session";
 
@@ -98,6 +99,7 @@ fn hash_pin(pin: &str) -> Result<String, ()> {
     Ok(format!("pbkdf2${ROUNDS}${}${}", hex(&salt), hex(&out)))
 }
 fn verify_password(encoded: &str, password: &str) -> bool {
+    if password.len()>4096 {return false;}
     let parts: Vec<_> = encoded.split('$').collect();
     if parts.len() != 4 || parts[0] != "pbkdf2" { return false; }
     let Ok(rounds) = parts[1].parse::<u32>() else { return false; };
@@ -134,12 +136,13 @@ fn session_cookie(token: &str) -> HeaderValue {
     HeaderValue::from_str(&value).expect("valid cookie")
 }
 fn clear_cookie() -> HeaderValue { HeaderValue::from_static("smart_media_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0") }
-fn set_session(path: &PathBuf, account_id: i64, profile_id: i64) -> Result<HeaderValue, ()> {
+fn set_session(path: &PathBuf, account_id: i64, profile_id: i64, expected_hash: Option<&str>) -> Result<HeaderValue, ()> {
     let token = random_token()?;
     let now = chrono::Utc::now().timestamp();
     let c = conn(path);
     let _ = c.execute("DELETE FROM auth_sessions WHERE expires_at<?1", [now]);
-    c.execute("INSERT INTO auth_sessions(token_hash,account_id,profile_id,created_at,expires_at) VALUES(?1,?2,?3,?4,?5)", params![token_hash(&token),account_id,profile_id,now,now+SESSION_DAYS*86400]).map_err(|_| ())?;
+    let changed=c.execute("INSERT INTO auth_sessions(token_hash,account_id,profile_id,created_at,expires_at) SELECT ?1,?2,?3,?4,?5 WHERE EXISTS(SELECT 1 FROM accounts WHERE id=?2 AND (?6 IS NULL OR password_hash=?6)) AND EXISTS(SELECT 1 FROM profiles WHERE id=?3 AND account_id=?2)", params![token_hash(&token),account_id,profile_id,now,now+SESSION_DAYS*86400,expected_hash]).map_err(|_| ())?;
+    if changed!=1{return Err(())}
     Ok(session_cookie(&token))
 }
 fn request_token(headers: &HeaderMap) -> Option<String> {
@@ -181,7 +184,8 @@ pub async fn setup(State(app): State<App>, Json(input): Json<Credentials>) -> Re
     let Some(email)=normalize_email(&input.email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a valid email address"}))).into_response()};
     let Some(username)=account_name(input.display_name.as_deref(),&email) else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Display names must be at most 64 characters"}))).into_response()};
     let password=input.password;
-    let Ok(Ok(password_hash)) = tokio::task::spawn_blocking(move || hash_password(&password)).await else {
+    let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+    let Ok(Ok(password_hash)) = tokio::task::spawn_blocking(move || {let _permit=crypto_permit;hash_password(&password)}).await else {
         return (StatusCode::BAD_REQUEST, Json(json!({"error":"Use a password between 12 and 1024 characters"}))).into_response();
     };
     let c = conn(&app.db);
@@ -195,7 +199,11 @@ pub async fn setup(State(app): State<App>, Json(input): Json<Credentials>) -> Re
     let profile=tx.last_insert_rowid();
     let _=tx.execute("INSERT INTO profile_watch_progress(profile_id,path,position,duration,updated_at,completed) SELECT ?1,path,position,duration,updated_at,completed FROM watch_progress",[profile]);
     if tx.commit().is_err() { return StatusCode::INTERNAL_SERVER_ERROR.into_response(); }
-    match set_session(&app.db,id,profile) { Ok(cookie)=>([(header::SET_COOKIE,cookie)],Json(json!({"ok":true}))).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+    match set_session(&app.db,id,profile,None) { Ok(cookie)=>([(header::SET_COOKIE,cookie)],Json(json!({"ok":true}))).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+}
+fn record_failure(c:&Connection, table:&str, column:&str, key:&dyn rusqlite::ToSql, now:i64, threshold:i64)->rusqlite::Result<()> {
+    c.execute(&format!("INSERT INTO {table}({column},attempts,window_started,blocked_until) VALUES(?1,1,?2,0) ON CONFLICT({column}) DO UPDATE SET attempts=CASE WHEN ?2-window_started>900 THEN 1 ELSE attempts+1 END, window_started=CASE WHEN ?2-window_started>900 THEN ?2 ELSE window_started END, blocked_until=CASE WHEN ?2-window_started<=900 AND attempts+1>=?3 THEN ?2+900 ELSE 0 END"),params![key,now,threshold])?;
+    Ok(())
 }
 pub async fn login(State(app): State<App>, Json(input): Json<Credentials>) -> Response {
     let Some(email)=normalize_email(&input.email) else{return (StatusCode::UNAUTHORIZED,Json(json!({"error":"Incorrect email or password"}))).into_response()};
@@ -207,15 +215,14 @@ pub async fn login(State(app): State<App>, Json(input): Json<Credentials>) -> Re
     const DUMMY_HASH:&str="pbkdf2$600000$00000000000000000000000000000000$0000000000000000000000000000000000000000000000000000000000000000";
     let check_hash=found.as_ref().map(|(_,h,_)|h.as_str()).unwrap_or(DUMMY_HASH).to_owned();
     let password=input.password;
-    let verified=tokio::task::spawn_blocking(move || verify_password(&check_hash,&password)).await.unwrap_or(false);
-    let Some((account,_hash,profile))=found.filter(|_|verified) else {
-        let (attempts,started):(i64,i64)=c.query_row("SELECT attempts,window_started FROM auth_login_attempts WHERE username=?1",[&email],|r|Ok((r.get(0)?,r.get(1)?))).unwrap_or((0,now));
-        let attempts=if now-started>900 {1}else{attempts+1};let blocked_until=if attempts>=10 {now+900}else{0};
-        let _=c.execute("INSERT INTO auth_login_attempts(username,attempts,window_started,blocked_until) VALUES(?1,?2,?3,?4) ON CONFLICT(username) DO UPDATE SET attempts=excluded.attempts,window_started=excluded.window_started,blocked_until=excluded.blocked_until",params![email,attempts,if attempts==1{now}else{started},blocked_until]);
+    let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+    let verified=tokio::task::spawn_blocking(move || {let _permit=crypto_permit;verify_password(&check_hash,&password)}).await.unwrap_or(false);
+    let Some((account,hash,profile))=found.filter(|_|verified) else {
+        if record_failure(&c,"auth_login_attempts","username",&email,now,10).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}
         return (StatusCode::UNAUTHORIZED,Json(json!({"error":"Incorrect email or password"}))).into_response();
     };
     let _=c.execute("DELETE FROM auth_login_attempts WHERE username=?1",[&email]);
-    match set_session(&app.db,account,profile) { Ok(cookie)=>([(header::SET_COOKIE,cookie)],Json(json!({"ok":true}))).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
+    match set_session(&app.db,account,profile,Some(&hash)) { Ok(cookie)=>([(header::SET_COOKIE,cookie)],Json(json!({"ok":true}))).into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response() }
 }
 pub async fn logout(State(app): State<App>, headers: HeaderMap) -> Response {
     if let Some(token)=request_token(&headers) { let _=conn(&app.db).execute("DELETE FROM auth_sessions WHERE token_hash=?1",[token_hash(&token)]); }
@@ -231,7 +238,9 @@ pub async fn profiles(State(app): State<App>, headers: HeaderMap, Json(input): J
     let name=input.name.trim();
     if name.is_empty()||name.len()>48||name.chars().any(char::is_control) { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Profile names must be 1–48 characters"}))).into_response(); }
     if input.pin != input.confirm_pin { return (StatusCode::BAD_REQUEST,Json(json!({"error":"The profile PIN entries do not match"}))).into_response(); }
-    let Ok(hash)=hash_pin(&input.pin) else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a 4–8 digit profile PIN"}))).into_response(); };
+    let pin=input.pin.clone();
+    let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+    let Ok(Ok(hash))=tokio::task::spawn_blocking(move||{let _permit=crypto_permit;hash_pin(&pin)}).await else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a 4–8 digit profile PIN"}))).into_response(); };
     match conn(&app.db).execute("INSERT INTO profiles(account_id,name,pin_hash,created_at) VALUES(?1,?2,?3,?4)",params![p.account_id,name,hash,chrono::Utc::now().timestamp()]) { Ok(_)=>Json(json!({"ok":true})).into_response(),Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"A profile with that name already exists"}))).into_response() }
 }
 pub async fn switch_profile(State(app): State<App>, headers: HeaderMap, Json(input): Json<ProfileSwitchInput>) -> Response {
@@ -245,10 +254,9 @@ pub async fn switch_profile(State(app): State<App>, headers: HeaderMap, Json(inp
         if blocked>now { return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Too many incorrect PIN attempts. Try again in 15 minutes."}))).into_response(); }
         let supplied=input.pin;
         let hash=pin_hash;
-        if !tokio::task::spawn_blocking(move || verify_password(&hash,&supplied)).await.unwrap_or(false) {
-            let (attempts,started):(i64,i64)=c.query_row("SELECT attempts,window_started FROM profile_pin_attempts WHERE profile_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?))).unwrap_or((0,now));
-            let attempts=if now-started>900 {1}else{attempts+1}; let blocked_until=if attempts>=5 {now+900}else{0};
-            let _=c.execute("INSERT INTO profile_pin_attempts(profile_id,attempts,window_started,blocked_until) VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET attempts=excluded.attempts,window_started=excluded.window_started,blocked_until=excluded.blocked_until",params![id,attempts,if attempts==1{now}else{started},blocked_until]);
+        let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+        if !tokio::task::spawn_blocking(move || {let _permit=crypto_permit;verify_password(&hash,&supplied)}).await.unwrap_or(false) {
+            if record_failure(&c,"profile_pin_attempts","profile_id",&id,now,5).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}
             return (StatusCode::FORBIDDEN,Json(json!({"error":"Incorrect profile PIN"}))).into_response();
         }
         let _=c.execute("DELETE FROM profile_pin_attempts WHERE profile_id=?1",[id]);
@@ -256,10 +264,13 @@ pub async fn switch_profile(State(app): State<App>, headers: HeaderMap, Json(inp
         let exists:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE id=?1 AND account_id=?2)",params![id,p.account_id],|r|r.get(0)).unwrap_or(false);
         if !exists { return StatusCode::NOT_FOUND.into_response(); }
         if input.pin!=input.confirm_pin.as_deref().unwrap_or("") { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Set and confirm a PIN for this profile before switching"}))).into_response(); }
-        let Ok(hash)=hash_pin(&input.pin) else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a 4–8 digit profile PIN"}))).into_response(); };
+        let pin=input.pin.clone();
+        let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+        let Ok(Ok(hash))=tokio::task::spawn_blocking(move||{let _permit=crypto_permit;hash_pin(&pin)}).await else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a 4–8 digit profile PIN"}))).into_response(); };
         if c.execute("UPDATE profiles SET pin_hash=?1 WHERE id=?2 AND account_id=?3 AND pin_hash IS NULL",params![hash,id,p.account_id]).unwrap_or(0)!=1 { return StatusCode::CONFLICT.into_response(); }
     }
-    if let Some(t)=request_token(&headers) { let _=conn(&app.db).execute("UPDATE auth_sessions SET profile_id=?1 WHERE token_hash=?2",params![id,token_hash(&t)]); }
+    let Some(t)=request_token(&headers) else{return StatusCode::UNAUTHORIZED.into_response()};
+    if conn(&app.db).execute("UPDATE auth_sessions SET profile_id=?1 WHERE token_hash=?2",params![id,token_hash(&t)]).unwrap_or(0)!=1{return StatusCode::INTERNAL_SERVER_ERROR.into_response()}
     Json(json!({"ok":true})).into_response()
 }
 pub async fn admin_accounts(State(app): State<App>) -> Json<Value> {
@@ -273,20 +284,23 @@ pub async fn create_account(State(app): State<App>, axum::Extension(actor): axum
     let role=input.role.as_deref().unwrap_or("user");
     if !matches!(role,"admin"|"user")||(role=="admin"&&actor.role!="owner") { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Choose a role permitted for your account"}))).into_response(); }
     let password=input.password;
-    let Ok(Ok(hash))=tokio::task::spawn_blocking(move || hash_password(&password)).await else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Passwords must be 12–1024 characters"}))).into_response(); };
-    let c=conn(&app.db); let now=chrono::Utc::now().timestamp();
+    let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+    let Ok(Ok(hash))=tokio::task::spawn_blocking(move || {let _permit=crypto_permit;hash_password(&password)}).await else { return (StatusCode::BAD_REQUEST,Json(json!({"error":"Passwords must be 12–1024 characters"}))).into_response(); };
+    let connection=conn(&app.db);let Ok(c)=connection.unchecked_transaction() else{return StatusCode::INTERNAL_SERVER_ERROR.into_response()}; let now=chrono::Utc::now().timestamp();
     match c.execute("INSERT INTO accounts(username,email,password_hash,role,created_at) VALUES(?1,?2,?3,?4,?5)",params![username,email,hash,role,now]) {
-        Ok(_)=>{let id=c.last_insert_rowid();let _=c.execute("INSERT INTO profiles(account_id,name,created_at) VALUES(?1,'Default',?2)",params![id,now]);Json(json!({"ok":true})).into_response()},
+        Ok(_)=>{let id=c.last_insert_rowid();if c.execute("INSERT INTO profiles(account_id,name,created_at) VALUES(?1,'Default',?2)",params![id,now]).is_err()||c.commit().is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}Json(json!({"ok":true})).into_response()},
         Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"That email or display name is already in use"}))).into_response()
     }
 }
 pub fn reset_owner_credentials(path:&PathBuf,email:&str,password:&str)->Result<(),String>{
     let email=normalize_email(email).ok_or_else(||"Invalid email address".to_string())?;
     let hash=hash_password(password).map_err(|_|"Password must contain 12–1024 characters".to_string())?;
-    let c=conn(path);
+    let connection=conn(path);
+    let c=connection.unchecked_transaction().map_err(|e|e.to_string())?;
     let changed=c.execute("UPDATE accounts SET email=?1,password_hash=?2 WHERE role='owner'",params![email,hash]).map_err(|_|"Email is already used by another account".to_string())?;
     if changed!=1{return Err("No owner account exists in this database".to_string())}
     c.execute("DELETE FROM auth_sessions WHERE account_id=(SELECT id FROM accounts WHERE role='owner')",[]).map_err(|e|e.to_string())?;
+    c.commit().map_err(|e|e.to_string())?;
     Ok(())
 }
 pub async fn update_account_credentials(State(app): State<App>, axum::Extension(actor): axum::Extension<Principal>, Json(input): Json<OwnerCredentialsInput>) -> Response {
@@ -296,14 +310,16 @@ pub async fn update_account_credentials(State(app): State<App>, axum::Extension(
     let Some((role,stored_hash))=account else{return StatusCode::NOT_FOUND.into_response()};
     if role=="owner" && input.account_id==actor.account_id {
         let Some(current)=input.current_owner_password.clone() else{return (StatusCode::FORBIDDEN,Json(json!({"error":"Enter the current owner password. If it is forgotten, reset it from the server shell."}))).into_response()};
-        let verified=tokio::task::spawn_blocking(move||verify_password(&stored_hash,&current)).await.unwrap_or(false);
+        let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+        let verified=tokio::task::spawn_blocking(move||{let _permit=crypto_permit;verify_password(&stored_hash,&current)}).await.unwrap_or(false);
         if !verified{return (StatusCode::FORBIDDEN,Json(json!({"error":"The current owner password is incorrect. If it is forgotten, reset it from the server shell."}))).into_response()}
     }
     let password=input.password;
-    let Ok(Ok(hash))=tokio::task::spawn_blocking(move||hash_password(&password)).await else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Passwords must be 12–1024 characters"}))).into_response()};
-    let c=conn(&app.db);
+    let Ok(crypto_permit)=CRYPTO_LIMIT.clone().try_acquire_owned() else{return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Authentication is busy. Try again shortly."}))).into_response()};
+    let Ok(Ok(hash))=tokio::task::spawn_blocking(move||{let _permit=crypto_permit;hash_password(&password)}).await else{return (StatusCode::BAD_REQUEST,Json(json!({"error":"Passwords must be 12–1024 characters"}))).into_response()};
+    let connection=conn(&app.db);let Ok(c)=connection.unchecked_transaction() else{return StatusCode::INTERNAL_SERVER_ERROR.into_response()};
     match c.execute("UPDATE accounts SET email=?1,password_hash=?2 WHERE id=?3",params![email,hash,input.account_id]){
-        Ok(_)=>{let _=c.execute("DELETE FROM auth_sessions WHERE account_id=?1",[input.account_id]);Json(json!({"ok":true,"login_again":input.account_id==actor.account_id})).into_response()},
+        Ok(_)=>{if c.execute("DELETE FROM auth_sessions WHERE account_id=?1",[input.account_id]).is_err()||c.commit().is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}Json(json!({"ok":true,"login_again":input.account_id==actor.account_id})).into_response()},
         Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"That email is already used by another account"}))).into_response()
     }
 }
@@ -417,6 +433,36 @@ pub async fn auth_page(State(app): State<App>) -> Html<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_password_verification_cannot_create_session_after_credentials_change() {
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("auth.sqlite");init(&path);let c=conn(&path);
+        c.execute("INSERT INTO accounts VALUES(1,'owner','owner@example.test','new-hash','owner',0)",[]).unwrap();
+        c.execute("INSERT INTO profiles(id,account_id,name,created_at) VALUES(1,1,'Default',0)",[]).unwrap();
+        assert!(set_session(&path,1,1,Some("old-hash")).is_err());
+        assert!(set_session(&path,1,1,Some("new-hash")).is_ok());
+        assert!(set_session(&path,2,1,None).is_err());
+    }
+    #[test]
+    fn failure_counter_increments_atomically_and_resets_expired_window() {
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("auth.sqlite");init(&path);
+        let workers:Vec<_>=(0..16).map(|_|{let path=path.clone();std::thread::spawn(move||record_failure(&conn(&path),"auth_login_attempts","username",&"fixture@example.test",1000,10).unwrap())}).collect();
+        for worker in workers {worker.join().unwrap();}
+        let c=conn(&path);
+        let counts:(i64,i64)=c.query_row("SELECT attempts,blocked_until FROM auth_login_attempts",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(counts,(16,1900));
+        record_failure(&c,"auth_login_attempts","username",&"fixture@example.test",2001,10).unwrap();
+        assert_eq!(c.query_row("SELECT attempts,window_started,blocked_until FROM auth_login_attempts",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?))).unwrap(),(1,2001,0));
+    }
+    #[test]
+    fn credential_reset_rolls_back_if_session_revocation_fails() {
+        let dir=tempfile::tempdir().unwrap();let path=dir.path().join("auth.sqlite");init(&path);let c=conn(&path);
+        c.execute("INSERT INTO accounts VALUES(1,'owner','old@example.test','original-hash','owner',0)",[]).unwrap();
+        c.execute("INSERT INTO profiles(id,account_id,name,created_at) VALUES(1,1,'Default',0)",[]).unwrap();
+        c.execute("INSERT INTO auth_sessions VALUES('session',1,1,0,9999999999)",[]).unwrap();
+        c.execute_batch("CREATE TRIGGER prevent_revoke BEFORE DELETE ON auth_sessions BEGIN SELECT RAISE(ABORT,'simulated write failure'); END;").unwrap();
+        assert!(reset_owner_credentials(&path,"new@example.test","a fixture password 123").is_err());
+        assert_eq!(c.query_row("SELECT email,password_hash FROM accounts",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap(),("old@example.test".into(),"original-hash".into()));
+    }
     #[test]
     fn password_hash_round_trips_and_is_salted() {
         let first=hash_password("a sufficiently long password").unwrap();

@@ -4,6 +4,7 @@ mod hls;
 mod media_features;
 mod parser;
 mod playback;
+mod processes;
 use axum::{
     extract::{Path as AxPath, Query, State},
     http::{HeaderMap, StatusCode},
@@ -19,6 +20,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    future::IntoFuture,
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
@@ -37,10 +39,11 @@ pub(crate) struct App {
     status: Arc<Mutex<Job>>,
     cancel: Arc<AtomicBool>,
     collections_running: Arc<AtomicBool>,
-    collections_attempted: Arc<Mutex<HashSet<i64>>>,
+    collections_attempted: Arc<Mutex<HashMap<i64,i64>>>,
     availability: Arc<std::sync::RwLock<std::collections::HashMap<String, bool>>>,
     availability_running: Arc<AtomicBool>,
     availability_generation: Arc<std::sync::atomic::AtomicU64>,
+    availability_checked_at: Arc<std::sync::atomic::AtomicI64>,
 }
 #[derive(Default, Clone, Serialize)]
 struct Job {
@@ -62,6 +65,11 @@ struct ScanEvent {
     message: String,
 }
 impl Job {
+    fn error(&mut self, message: String) {
+        if self.errors.len()>=100 {self.errors.remove(0);}
+        self.errors.push(message.clone());
+        self.log(message);
+    }
     fn log(&mut self, message: impl Into<String>) {
         if self.events.len() >= 100 {
             self.events.pop_front();
@@ -745,10 +753,20 @@ async fn identify(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
     }
     result
 }
-fn assign_scanned_file(c:&Connection,path:&str,result:&Value,library_id:Option<i64>,auto_sort:bool) {
+fn assign_scanned_file(c:&Connection,path:&str,result:&Value,library_id:Option<i64>,auto_sort:bool) -> rusqlite::Result<()> {
     let result_kind=library_kind_for_result(result);
     let target=if auto_sort && matches!(result_kind,"movie"|"tv") {c.query_row("SELECT id FROM libraries WHERE kind=?1 ORDER BY id LIMIT 1",[result_kind],|r|r.get::<_,i64>(0)).ok()} else {library_id.or_else(||c.query_row("SELECT id FROM libraries WHERE kind=?1 ORDER BY id LIMIT 1",[result_kind],|r|r.get::<_,i64>(0)).ok())};
-    if let Some(id)=target {let _=c.execute("INSERT INTO library_files(path,library_id) VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET library_id=excluded.library_id",params![path,id]);}
+    if let Some(id)=target {c.execute("INSERT INTO library_files(path,library_id) VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET library_id=excluded.library_id",params![path,id])?;}
+    Ok(())
+}
+// Identification awaits the network; re-check locked atomically at the actual write.
+#[allow(clippy::too_many_arguments)]
+fn persist_scanned_file(c:&Connection,path:&str,root:&str,size:i64,mtime:i64,parsed:&Parsed,result:&Value,library_id:Option<i64>,auto_sort:bool)->rusqlite::Result<bool> {
+    let tx=c.unchecked_transaction()?;
+    let changed=tx.execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(path) DO UPDATE SET root=excluded.root,size=excluded.size,mtime=excluded.mtime,parsed=excluded.parsed,result=excluded.result,available=1,scanned=excluded.scanned WHERE files.locked=0",params![path,root,size,mtime,serde_json::to_string(parsed).unwrap(),result.to_string(),Utc::now().to_rfc3339()])?;
+    if changed>0 {assign_scanned_file(&tx,path,result,library_id,auto_sort)?;}
+    tx.commit()?;
+    Ok(changed>0)
 }
 async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bool, full_scan:bool) {
     let mut paths = vec![];
@@ -767,8 +785,7 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
             _ => {
                 let mut s = app.status.lock().await;
                 let message = format!("Unavailable root: {root}");
-                s.errors.push(message.clone());
-                s.log(message);
+                s.error(message);
                 continue;
             }
         };
@@ -790,8 +807,7 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
                 Err(e) => {
                     let mut s = app.status.lock().await;
                     let message = e.to_string();
-                    s.errors.push(message.clone());
-                    s.log(message);
+                    s.error(message);
                 }
             }
         }
@@ -902,7 +918,13 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
                 "UPDATE files SET available=1, scanned=?2 WHERE path=?1",
                 params![ps, Utc::now().to_rfc3339()],
             );
-            if let Some((_,_,_,previous))=&old {let result:Value=serde_json::from_str(previous).unwrap_or_default();assign_scanned_file(&db(&app),&ps,&result,library_id,auto_sort);}
+            if let Some((_,_,_,previous))=&old {
+                let c=db(&app);
+                // Read the latest result, rather than a snapshot from before an await.
+                let latest:String=c.query_row("SELECT result FROM files WHERE path=?1",[&ps],|r|r.get(0)).unwrap_or_else(|_|previous.clone());
+                let result:Value=serde_json::from_str(&latest).unwrap_or_default();
+                if let Err(e)=assign_scanned_file(&c,&ps,&result,library_id,auto_sort) {app.status.lock().await.error(format!("Could not assign {ps}: {e}"));}
+            }
         } else {
             {
                 let mut s = app.status.lock().await;
@@ -921,8 +943,9 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
                     result["explanation"].as_str().unwrap_or("")
                 ));
             }
-            let _=db(&app).execute("INSERT INTO files(path,root,size,mtime,parsed,result,scanned) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(path) DO UPDATE SET root=excluded.root,size=excluded.size,mtime=excluded.mtime,parsed=excluded.parsed,result=excluded.result,available=1,scanned=excluded.scanned",params![ps,root.to_string_lossy(),md.len() as i64,mtime,serde_json::to_string(&p).unwrap(),result.to_string(),Utc::now().to_rfc3339()]);
-            assign_scanned_file(&db(&app),&ps,&result,library_id,auto_sort);
+            if let Err(e)=persist_scanned_file(&db(&app),&ps,&root.to_string_lossy(),md.len() as i64,mtime,&p,&result,library_id,auto_sort) {
+                app.status.lock().await.error(format!("Could not save {ps}: {e}"));
+            }
         }
         app.status.lock().await.processed += 1;
     }
@@ -951,13 +974,7 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
 async fn choose_folder() -> impl IntoResponse {
     #[cfg(target_os = "macos")]
     {
-        let result = tokio::process::Command::new("osascript")
-            .args([
-                "-e",
-                "POSIX path of (choose folder with prompt \"Choose a media folder to scan\")",
-            ])
-            .output()
-            .await;
+        let result = crate::processes::output(tokio::process::Command::new("osascript").args(["-e","POSIX path of (choose folder with prompt \"Choose a media folder to scan\")"]),Duration::from_secs(300),16_384).await;
         match result {
             Ok(output) if output.status.success() => {
                 let path = String::from_utf8_lossy(&output.stdout)
@@ -998,7 +1015,7 @@ async fn start(State(app): State<App>, Json(req): Json<ScanRequest>) -> impl Int
             Json(json!({"error":"Scan already running"})),
         );
     }
-    if req.roots.is_empty() {
+    if req.roots.is_empty() || req.roots.len()>128 || req.roots.iter().any(|r|r.trim().is_empty()||r.len()>1024||r.chars().any(char::is_control)) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"error":"Add at least one directory"})),
@@ -1022,8 +1039,19 @@ async fn start(State(app): State<App>, Json(req): Json<ScanRequest>) -> impl Int
     app.cancel.store(false, Ordering::Relaxed);
     drop(s);
     let full_scan=req.full_scan;
-    tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(scan(app, req.roots, req.library_id, auto_sort, full_scan));
+    tokio::spawn(async move {
+        let worker_app=app.clone();
+        if let Err(e)=tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(scan(worker_app, req.roots, req.library_id, auto_sort, full_scan));
+        }).await {
+            let mut status=app.status.lock().await;
+            status.running=false;
+            status.phase="Failed".into();
+            status.finished_at=Some(Utc::now().to_rfc3339());
+            status.current_file=None;
+            status.current_file_started_at=None;
+            status.error(format!("Scan worker stopped unexpectedly: {e}"));
+        }
     });
     (StatusCode::OK, Json(json!({"ok":true})))
 }
@@ -1064,17 +1092,17 @@ async fn fetch_movie_collections(app: App, ids: Vec<i64>) {
     let token = tmdb_token(&app);
     if !token.is_empty() {
         for id in ids {
-            if !app.collections_attempted.lock().await.insert(id) {
-                continue;
-            }
+            if app.collections_attempted.lock().await.get(&id).is_some_and(|next|*next>Utc::now().timestamp()) {continue;}
             let key = format!("tmdb:movie-detail:{id}");
-            let _ = cached(
+            let result = cached(
                 &app,
                 &key,
                 &format!("https://api.themoviedb.org/3/movie/{id}"),
                 Some(&token),
             )
             .await;
+            // Retry transient provider failures without requiring a server restart.
+            app.collections_attempted.lock().await.insert(id,Utc::now().timestamp()+if result.is_ok(){7*86400}else{300});
             // Keep well below the provider's documented upper rate limit.
             tokio::time::sleep(Duration::from_millis(125)).await;
         }
@@ -1087,7 +1115,7 @@ async fn movie_collections(State(app): State<App>) -> Json<Value> {
         let attempted = app.collections_attempted.lock().await;
         ids.iter()
             .copied()
-            .filter(|id| !attempted.contains(id))
+            .filter(|id| attempted.get(id).is_none_or(|next|*next<=Utc::now().timestamp()))
             .collect()
     };
     if !pending.is_empty()
@@ -1271,11 +1299,12 @@ async fn index(State(app): State<App>, headers: HeaderMap) -> Html<String> {
     Html(html)
 }
 fn ensure_availability_check(app: &App, rows: &Value) {
+    let expired=Utc::now().timestamp()-app.availability_checked_at.load(Ordering::Acquire)>=60;
     let paths: Vec<String> = rows
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|row| row["available"].is_null())
+        .filter(|row| expired || row["available"].is_null())
         .filter_map(|row| row["path"].as_str().map(str::to_owned))
         .collect();
     if paths.is_empty()
@@ -1286,9 +1315,13 @@ fn ensure_availability_check(app: &App, rows: &Value) {
     {
         return;
     }
+    struct RunningGuard(Arc<AtomicBool>);
+    impl Drop for RunningGuard {fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+    let guard=RunningGuard(app.availability_running.clone());
     let task_app = app.clone();
     let generation = app.availability_generation.load(Ordering::Acquire);
     tokio::task::spawn_blocking(move || {
+        let _guard=guard;
         for path in paths {
             if task_app.availability_generation.load(Ordering::Acquire) != generation {
                 break;
@@ -1303,9 +1336,9 @@ fn ensure_availability_check(app: &App, rows: &Value) {
                 .unwrap()
                 .insert(path, available);
         }
-        task_app
-            .availability_running
-            .store(false, Ordering::Release);
+        if task_app.availability_generation.load(Ordering::Acquire)==generation {
+            task_app.availability_checked_at.store(Utc::now().timestamp(),Ordering::Release);
+        }
     });
 }
 
@@ -1361,8 +1394,8 @@ async fn get_library_files(State(app): State<App>, AxPath(id): AxPath<i64>) -> R
     if !exists {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Json(rows) = files_blocking(&app);
-    ensure_availability_check(&app, &rows);
+    drop(c);
+    let Json(rows) = files(State(app.clone())).await;
     let visible: Vec<Value> = rows
         .as_array()
         .cloned()
@@ -1384,16 +1417,17 @@ async fn save_library(State(app):State<App>,Json(input):Json<LibraryInput>)->Res
     match result{Ok(1)=>Json(json!({"ok":true})).into_response(),Ok(_)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"A library with that name already exists"}))).into_response()}
 }
 async fn delete_library(State(app):State<App>,Json(input):Json<LibraryId>)->Response{
-    let c=db(&app);let kind:Option<String>=c.query_row("SELECT kind FROM libraries WHERE id=?1",[input.id],|r|r.get(0)).ok();let Some(kind)=kind else{return StatusCode::NOT_FOUND.into_response()};let count:i64=c.query_row("SELECT COUNT(*) FROM libraries WHERE kind=?1",[kind.as_str()],|r|r.get(0)).unwrap_or(0);if count<=1{return (StatusCode::CONFLICT,Json(json!({"error":"Keep at least one library of each type; rename it if needed"}))).into_response()}
-    let _=c.execute("UPDATE library_files SET library_id=(SELECT id FROM libraries WHERE kind=?1 AND id<>?2 ORDER BY id LIMIT 1) WHERE library_id=?2",params![kind,input.id]);
-    match c.execute("DELETE FROM libraries WHERE id=?1",[input.id]){Ok(1)=>Json(json!({"ok":true,"media_kept":true})).into_response(),Ok(_)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response()}
+    let connection=db(&app);let Ok(c)=connection.unchecked_transaction() else {return StatusCode::INTERNAL_SERVER_ERROR.into_response()};let kind:Option<String>=c.query_row("SELECT kind FROM libraries WHERE id=?1",[input.id],|r|r.get(0)).ok();let Some(kind)=kind else{return StatusCode::NOT_FOUND.into_response()};let count:i64=c.query_row("SELECT COUNT(*) FROM libraries WHERE kind=?1",[kind.as_str()],|r|r.get(0)).unwrap_or(0);if count<=1{return (StatusCode::CONFLICT,Json(json!({"error":"Keep at least one library of each type; rename it if needed"}))).into_response()}
+    if c.execute("UPDATE library_files SET library_id=(SELECT id FROM libraries WHERE kind=?1 AND id<>?2 ORDER BY id LIMIT 1) WHERE library_id=?2",params![kind,input.id]).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response();}
+    match c.execute("DELETE FROM libraries WHERE id=?1",[input.id]){Ok(1)=>if c.commit().is_ok(){Json(json!({"ok":true,"media_kept":true})).into_response()}else{StatusCode::INTERNAL_SERVER_ERROR.into_response()},Ok(_)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response()}
 }
 async fn get_library_settings(State(app):State<App>)->Json<Value>{let c=db(&app);let auto=c.query_row("SELECT value FROM settings WHERE key='library_auto_sort'",[],|r|r.get::<_,String>(0)).map(|v|v=="true").unwrap_or(true);let raw=c.query_row("SELECT value FROM settings WHERE key='library_scan_roots'",[],|r|r.get::<_,String>(0)).unwrap_or_else(|_|"[]".into());Json(json!({"auto_sort":auto,"scan_roots":serde_json::from_str::<Value>(&raw).unwrap_or(json!([]))}))}
 async fn save_library_settings(State(app):State<App>,Json(input):Json<LibrarySettingsInput>)->Response{
     if input.scan_roots.len()>128||input.scan_roots.iter().any(|x|x.trim().is_empty()||x.len()>1024||x.chars().any(char::is_control)){return StatusCode::BAD_REQUEST.into_response()}
-    let roots=serde_json::to_string(&input.scan_roots).unwrap_or_else(|_|"[]".into());let c=db(&app);
+    let roots=serde_json::to_string(&input.scan_roots).unwrap_or_else(|_|"[]".into());let connection=db(&app);let Ok(c)=connection.unchecked_transaction() else{return StatusCode::INTERNAL_SERVER_ERROR.into_response()};
     if c.execute("INSERT INTO settings(key,value) VALUES('library_auto_sort',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[if input.auto_sort{"true"}else{"false"}]).is_err()||c.execute("INSERT INTO settings(key,value) VALUES('library_scan_roots',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[roots]).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}
-    if input.auto_sort {let rows:Vec<(String,String)>=c.prepare("SELECT path,result FROM files").and_then(|mut s|s.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect()).unwrap_or_default();for (path,raw) in rows{let result:Value=serde_json::from_str(&raw).unwrap_or_default();assign_scanned_file(&c,&path,&result,None,true);}}
+    if input.auto_sort {let rows:Vec<(String,String)>=c.prepare("SELECT path,result FROM files").and_then(|mut s|s.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect()).unwrap_or_default();for (path,raw) in rows{let result:Value=serde_json::from_str(&raw).unwrap_or_default();if assign_scanned_file(&c,&path,&result,None,true).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}}}
+    if c.commit().is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}
     Json(json!({"ok":true})).into_response()
 }
 
@@ -1429,11 +1463,9 @@ async fn update(State(app): State<App>, Json(req): Json<Value>) -> impl IntoResp
         v["requires_review"] = json!(false);
         v["confidence"] = json!(100);
         v["explanation"] = json!("Manually confirmed and locked");
-        let _ = c.execute(
-            "UPDATE files SET result=?2,locked=1 WHERE path=?1",
-            params![path, v.to_string()],
-        );
-        StatusCode::OK
+        match c.execute("UPDATE files SET result=?2,locked=1 WHERE path=?1",params![path,v.to_string()]) {
+            Ok(1)=>StatusCode::OK, Ok(_)=>StatusCode::NOT_FOUND, Err(_)=>StatusCode::INTERNAL_SERVER_ERROR,
+        }
     } else {
         StatusCode::NOT_FOUND
     }
@@ -1908,10 +1940,11 @@ async fn main() {
         status: Arc::new(Mutex::new(Job::default())),
         cancel: Arc::new(AtomicBool::new(false)),
         collections_running: Arc::new(AtomicBool::new(false)),
-        collections_attempted: Arc::new(Mutex::new(HashSet::new())),
+        collections_attempted: Arc::new(Mutex::new(HashMap::new())),
         availability: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         availability_running: Arc::new(AtomicBool::new(false)),
         availability_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        availability_checked_at: Arc::new(std::sync::atomic::AtomicI64::new(0)),
     };
     init(&db(&app));
     auth::init(&app.db);
@@ -1981,7 +2014,7 @@ async fn main() {
         .route("/api/playback/subtitle", get(playback::subtitle))
         .route("/api/playback/transcode", get(playback::transcode))
         .route_layer(middleware::from_fn_with_state(auth_db, auth::guard))
-        .with_state(app);
+        .with_state(app.clone());
     let port = std::env::var("SMART_MEDIA_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
@@ -1991,7 +2024,44 @@ async fn main() {
         .await
         .expect("bind configured address");
     println!("Smart Media Scanner: http://{host}:{port}");
-    axum::serve(listener, routes).await.unwrap();
+    start_maintenance(app.clone());
+    let (stop, stopped)=tokio::sync::oneshot::channel::<()>();
+    let server=axum::serve(listener,routes).with_graceful_shutdown(async {let _=stopped.await;}).into_future();
+    tokio::pin!(server);
+    tokio::select! {
+        result=&mut server=>{result.unwrap();},
+        _=shutdown_signal()=>{
+            app.cancel.store(true,Ordering::Release);
+            let _=stop.send(());
+            hls::shutdown_all().await;
+            // A client can keep a stream open indefinitely; bound service shutdown.
+            let _=tokio::time::timeout(Duration::from_secs(10),&mut server).await;
+        }
+    }
+}
+fn start_maintenance(app:App) {
+    tokio::spawn(async move {
+        loop {
+            let snapshot=app.clone();
+            let _=tokio::task::spawn_blocking(move||maintain_database(&db(&snapshot),Utc::now().timestamp())).await;
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        }
+    });
+}
+fn maintain_database(c:&Connection,now:i64)->rusqlite::Result<()> {
+    let tx=c.unchecked_transaction()?;
+    tx.execute("DELETE FROM auth_sessions WHERE expires_at<=?1",[now])?;
+    tx.execute("DELETE FROM auth_login_attempts WHERE window_started<?1 AND blocked_until<=?2",params![now-86400,now])?;
+    tx.execute("DELETE FROM profile_pin_attempts WHERE window_started<?1 AND blocked_until<=?2",params![now-86400,now])?;
+    tx.execute("DELETE FROM cache WHERE key GLOB 'playback:probe:v3:*'",[])?;
+    tx.commit()
+}
+async fn shutdown_signal() {
+    #[cfg(unix)] {
+        let mut term=tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select!{_=tokio::signal::ctrl_c()=>{},_=term.recv()=>{}}
+    }
+    #[cfg(not(unix))] {let _=tokio::signal::ctrl_c().await;}
 }
 
 #[cfg(test)]
@@ -2008,10 +2078,11 @@ mod integration_tests {
             status: Arc::new(Mutex::new(Job::default())),
             cancel: Arc::new(AtomicBool::new(false)),
             collections_running: Arc::new(AtomicBool::new(false)),
-            collections_attempted: Arc::new(Mutex::new(HashSet::new())),
+            collections_attempted: Arc::new(Mutex::new(HashMap::new())),
             availability: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             availability_running: Arc::new(AtomicBool::new(false)),
             availability_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        availability_checked_at: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         };
         init(&db(&app));
         let show =
@@ -2034,6 +2105,81 @@ mod integration_tests {
                 .unwrap();
         }
         (temp, app)
+    }
+    #[test]
+    fn scan_write_rechecks_manual_lock_and_rolls_back_failed_membership() {
+        let (_temp,app)=fixture();let c=db(&app);
+        let parsed=parse(Path::new("/Media/movie.mp4"));
+        let original=json!({"kind":"movie","title":"Manual"});
+        assert!(persist_scanned_file(&c,"/Media/movie.mp4","/Media",1,0,&parsed,&original,None,true).unwrap());
+        let membership:i64=c.query_row("SELECT library_id FROM library_files WHERE path='/Media/movie.mp4'",[],|r|r.get(0)).unwrap();
+        c.execute("UPDATE files SET locked=1 WHERE path='/Media/movie.mp4'",[]).unwrap();
+        assert!(!persist_scanned_file(&c,"/Media/movie.mp4","/Media",2,1,&parsed,&json!({"kind":"tv","title":"Stale scan"}),None,true).unwrap());
+        let (raw,size):(String,i64)=c.query_row("SELECT result,size FROM files WHERE path='/Media/movie.mp4'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(),original);assert_eq!(size,1);
+        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/movie.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),membership);
+        c.execute("UPDATE files SET locked=0 WHERE path='/Media/movie.mp4'",[]).unwrap();
+        assert!(persist_scanned_file(&c,"/Media/movie.mp4","/Media",2,1,&parsed,&json!({"kind":"video"}),Some(-999),false).is_err());
+        assert_eq!(c.query_row("SELECT result FROM files WHERE path='/Media/movie.mp4'",[],|r|r.get::<_,String>(0)).unwrap(),raw);
+    }
+    #[tokio::test]
+    async fn library_deletion_failure_preserves_library_and_memberships() {
+        let (_temp,app)=fixture();let c=db(&app);
+        c.execute("INSERT INTO libraries(name,kind,created_at) VALUES('Other movies','movie',1)",[]).unwrap();let id=c.last_insert_rowid();
+        c.execute("INSERT INTO library_files(path,library_id) VALUES('/fixture',?1)",[id]).unwrap();
+        c.execute_batch("CREATE TRIGGER prevent_membership_update BEFORE UPDATE ON library_files BEGIN SELECT RAISE(ABORT,'simulated disk/write failure'); END;").unwrap();
+        assert_eq!(delete_library(State(app.clone()),Json(LibraryId{id})).await.status(),StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/fixture'",[],|r|r.get::<_,i64>(0)).unwrap(),id);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM libraries WHERE id=?1",[id],|r|r.get::<_,i64>(0)).unwrap(),1);
+        c.execute_batch("DROP TRIGGER prevent_membership_update;").unwrap();
+        assert_eq!(delete_library(State(app),Json(LibraryId{id})).await.status(),StatusCode::OK);
+        assert_ne!(c.query_row("SELECT library_id FROM library_files WHERE path='/fixture'",[],|r|r.get::<_,i64>(0)).unwrap(),id);
+    }
+    #[tokio::test]
+    async fn library_settings_failure_rolls_back_earlier_setting() {
+        let (_temp,app)=fixture();let c=db(&app);
+        c.execute_batch("CREATE TRIGGER prevent_roots BEFORE INSERT ON settings WHEN NEW.key='library_scan_roots' BEGIN SELECT RAISE(ABORT,'simulated write failure'); END;").unwrap();
+        assert_eq!(save_library_settings(State(app),Json(LibrarySettingsInput{auto_sort:false,scan_roots:vec!["/Media".into()]})).await.status(),StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(c.query_row("SELECT value FROM settings WHERE key='library_auto_sort'",[],|r|r.get::<_,String>(0)).unwrap(),"true");
+    }
+    #[tokio::test]
+    async fn account_creation_cannot_leave_an_account_without_a_profile() {
+        let (_temp,app)=fixture();auth::init(&app.db);let c=db(&app);
+        c.execute_batch("CREATE TRIGGER prevent_profile BEFORE INSERT ON profiles BEGIN SELECT RAISE(ABORT,'simulated write failure'); END;").unwrap();
+        let actor=auth::Principal{account_id:1,username:"Owner".into(),email:"owner@example.test".into(),role:"owner".into(),profile_id:1,profile_name:"Default".into()};
+        let response=auth::create_account(State(app),axum::Extension(actor),Json(auth::AccountInput{email:"new@example.test".into(),password:"fixture password 123".into(),confirm_password:"fixture password 123".into(),display_name:None,role:None})).await;
+        assert_eq!(response.status(),StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM accounts",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test]
+    fn scan_error_history_is_bounded() {
+        let mut job=Job::default();
+        for i in 0..10_000 {job.error(format!("failure {i}"));}
+        assert_eq!(job.errors.len(),100);assert_eq!(job.events.len(),100);
+        assert_eq!(job.errors.first().unwrap(),"failure 9900");
+    }
+    #[tokio::test]
+    async fn availability_rechecks_reconnected_media_after_ttl() {
+        let (temp,app)=fixture();let path=temp.path().join("reconnected.mp4");
+        let key=path.to_string_lossy().to_string();
+        app.availability.write().unwrap().insert(key.clone(),false);
+        std::fs::write(&path,b"fixture").unwrap();
+        let rows=json!([{"path":key,"available":false}]);
+        ensure_availability_check(&app,&rows);
+        tokio::time::timeout(Duration::from_secs(3),async {while app.availability_running.load(Ordering::Acquire){tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();
+        assert_eq!(app.availability.read().unwrap().get(&key),Some(&true));
+        assert!(app.availability_checked_at.load(Ordering::Acquire)>0);
+    }
+    #[test]
+    fn maintenance_prunes_ephemeral_data_but_keeps_metadata_and_active_blocks() {
+        let (_temp,app)=fixture();auth::init(&app.db);let c=db(&app);
+        c.execute("INSERT INTO auth_login_attempts VALUES('old@example.test',1,0,0)",[]).unwrap();
+        c.execute("INSERT INTO auth_login_attempts VALUES('blocked@example.test',10,0,999999999)",[]).unwrap();
+        c.execute("INSERT INTO cache VALUES('playback:probe:v3:old','{}',0)",[]).unwrap();
+        maintain_database(&c,100_000).unwrap();
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM auth_login_attempts",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM cache WHERE key GLOB 'playback:probe:v3:*'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        assert!(c.query_row("SELECT value FROM cache WHERE key='tvmaze:search:regular show'",[],|r|r.get::<_,String>(0)).is_ok());
     }
     #[test]
     fn transcode_quality_balance_changes_bitrate_for_both_stream_modes() {
@@ -2139,13 +2285,13 @@ mod integration_tests {
         let video_id:i64=c.query_row("SELECT id FROM libraries WHERE name='YouTube videos'",[],|r|r.get(0)).unwrap();
         let movie_id:i64=c.query_row("SELECT id FROM libraries WHERE kind='movie'",[],|r|r.get(0)).unwrap();
         let show_id:i64=c.query_row("SELECT id FROM libraries WHERE kind='tv'",[],|r|r.get(0)).unwrap();
-        assign_scanned_file(&c,"/Media/movie.mp4",&json!({"kind":"movie"}),Some(video_id),true);
-        assign_scanned_file(&c,"/Media/episode.mp4",&json!({"kind":"tv"}),Some(video_id),true);
-        assign_scanned_file(&c,"/Media/clip.mp4",&json!({"kind":"video"}),Some(video_id),true);
+        assign_scanned_file(&c,"/Media/movie.mp4",&json!({"kind":"movie"}),Some(video_id),true).unwrap();
+        assign_scanned_file(&c,"/Media/episode.mp4",&json!({"kind":"tv"}),Some(video_id),true).unwrap();
+        assign_scanned_file(&c,"/Media/clip.mp4",&json!({"kind":"video"}),Some(video_id),true).unwrap();
         assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/movie.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),movie_id);
         assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/episode.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),show_id);
         assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/clip.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),video_id);
-        assign_scanned_file(&c,"/Media/manual.mp4",&json!({"kind":"tv"}),Some(video_id),false);
+        assign_scanned_file(&c,"/Media/manual.mp4",&json!({"kind":"tv"}),Some(video_id),false).unwrap();
         assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/manual.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),video_id);
     }
 

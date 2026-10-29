@@ -88,3 +88,26 @@ test('fullscreen targets the dialog and exits when already active',async()=>{
 test('fullscreen rejection leaves the player usable with a clear message',async()=>{
  const h=setup(['toggleFullscreen']);h.context.document={};h.elements['#dialog']={requestFullscreen:async()=>{throw Error('not allowed')}};await h.context.toggleFullscreen();assert(h.elements['#player-status'].textContent.includes('not available'));
 });
+test('completion timeupdate events stay throttled and seeking back resets completion',()=>{
+ const h=setup(['savePlaybackProgress']);h.setState({path:'/fixture',mode:'direct',duration:100});
+ h.context.savePlaybackProgress(93,true);assert.equal(h.posts.length,2);
+ for(let i=0;i<1000;i++)h.context.savePlaybackProgress(94,true);
+ assert.equal(h.posts.length,2,'completed playback must not flood SQLite');
+ h.context.savePlaybackProgress(30,false);assert.equal(h.posts.length,4);assert.equal(h.posts[2].data.completed,false);
+ h.advance(8001);h.context.savePlaybackProgress(31,false);assert.equal(h.posts.length,6);
+});
+test('slow scan polling never overlaps and ordinary accounts never request admin status',async()=>{
+ const h=setup(['pollStatus']);let requests=0,finish;
+ h.context.api=()=>{requests++;return new Promise(resolve=>finish=resolve)};
+ h.context.updateScanNotice=()=>{};h.context.refreshFiles=()=>{};
+ vm.runInContext('let statusPolling=false,job={},current="dashboard",collectionRefreshTick=0;authUser={role:"user"}',h.context);
+ await h.context.pollStatus();assert.equal(requests,0);
+ vm.runInContext('authUser={role:"owner"}',h.context);
+ let first=h.context.pollStatus();await h.context.pollStatus();assert.equal(requests,1);
+ finish({running:false});await first;assert.equal(vm.runInContext('statusPolling',h.context),false);
+});
+test('failed status polling releases the in-flight guard for recovery',async()=>{
+ const h=setup(['pollStatus']);h.context.console={error(){}};h.context.api=()=>Promise.reject(Error('offline'));
+ vm.runInContext('let statusPolling=false,job={};authUser={role:"owner"}',h.context);
+ await h.context.pollStatus();assert.equal(vm.runInContext('statusPolling',h.context),false);
+});

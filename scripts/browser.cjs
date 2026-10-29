@@ -13,6 +13,16 @@ const playwright=require('playwright');
   await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();
   await page.locator('.browse-controls').waitFor();await page.locator('.card').first().waitFor();
   assert.equal(await page.locator('.card').count(),3);
+  // Browsing an empty library must not shrink global search or Overview's snapshot.
+  await page.locator('#nav').getByRole('button',{name:/^TV Shows/}).click();
+  await page.locator('#app .empty').filter({hasText:'No titles match'}).waitFor();
+  await page.locator('#library-search').fill('Fixture 1');
+  await page.getByRole('heading',{name:'Fixture 1',exact:true}).first().waitFor();
+  await page.locator('#library-search').fill('');
+  await page.locator('#nav').getByRole('button',{name:'Overview',exact:true}).click();
+  assert.equal(await page.evaluate(()=>files.length),3);
+  await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();
+  await page.locator('.browse-controls').waitFor();await page.locator('.card').first().waitFor();
   await page.getByLabel('Year',{exact:true}).selectOption('2021');assert.equal(await page.locator('.card').count(),1);assert(await page.getByRole('heading',{name:'Fixture 1',exact:true}).isVisible());
   await page.getByLabel('Year',{exact:true}).selectOption('');await page.getByLabel('Genre',{exact:true}).selectOption('Comedy');assert.equal(await page.locator('.card').count(),2);
   await page.getByLabel('Genre',{exact:true}).selectOption('');await page.getByLabel('Time available',{exact:true}).selectOption('90');assert.equal(await page.locator('.card').count(),2);
@@ -86,6 +96,11 @@ const playwright=require('playwright');
   const help=await context.newPage();await help.goto(process.argv[2]+'/help');await help.getByRole('heading',{name:'PlexV2: navodila za uporabo',exact:true}).waitFor();
   await help.setViewportSize({width:390,height:844});assert(await help.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await help.close();
   await page.locator('#account-controls .profile-trigger').click();await page.getByRole('button',{name:'Sign out',exact:true}).click();await page.locator('#email').waitFor();
+  const viewerContext=await browser.newContext();const viewer=await viewerContext.newPage();
+  let forbiddenPolls=0;viewer.on('response',r=>{if(r.url().endsWith('/api/status')&&r.status()===403)forbiddenPolls++});
+  await viewer.goto(process.argv[2]);await viewer.locator('#email').fill('viewer@example.test');await viewer.locator('#password').fill('viewer password 123');await viewer.locator('form button').click();
+  await viewer.locator('#account-controls .profile-trigger').waitFor();await viewer.waitForTimeout(2200);
+  assert.equal(forbiddenPolls,0);await viewerContext.close();
   assert.deepEqual(errors,[]);
 
   console.log('PASS: Chrome UI login, library filters, watched/reset, 0/1/2 audio visibility, removed controls, filters/search/sort, watchlist, HLS quality/audio, dual subtitles, profile appearance, sessions, mobile layout, offline/help/logout');

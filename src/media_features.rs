@@ -76,15 +76,8 @@ pub async fn thumbnail(State(app): State<App>, Query(input): Query<ThumbnailQuer
                 "pipe:1",
             ])
             .kill_on_drop(true);
-        let output = match tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            command.output(),
-        )
-        .await
-        {
-            Ok(Ok(v)) if v.status.success() && v.stdout.len() > 4 && v.stdout.len() < 1_000_000 => {
-                v.stdout
-            }
+        let output = match crate::processes::output(&mut command,std::time::Duration::from_secs(15),1_000_000).await {
+            Ok(v) if v.status.success() && v.stdout.len() > 4 => v.stdout,
             _ => {
                 return (
                     StatusCode::BAD_GATEWAY,
@@ -93,19 +86,8 @@ pub async fn thumbnail(State(app): State<App>, Query(input): Query<ThumbnailQuer
                     .into_response()
             }
         };
-        let _ = tokio::fs::create_dir_all(&cache).await;
-        // Keep the cache bounded even when browsing many long videos.
-        if let Ok(mut entries) = tokio::fs::read_dir(&cache).await {
-            let mut names = Vec::new();
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                names.push(entry.path());
-            }
-            names.sort();
-            for old in names.iter().take(names.len().saturating_sub(255)) {
-                let _ = tokio::fs::remove_file(old).await;
-            }
-        }
-        let _ = tokio::fs::write(cached, &output).await;
+        let saved=output.clone();
+        let _=tokio::task::spawn_blocking(move||cache_preview(&cache,&cached,&saved)).await;
         output
     };
     drop(permit);
@@ -117,4 +99,36 @@ pub async fn thumbnail(State(app): State<App>, Query(input): Query<ThumbnailQuer
         jpeg,
     )
         .into_response()
+}
+
+// Serialize pruning and publish each JPEG by rename, never as a partial file.
+fn cache_preview(cache:&std::path::Path,cached:&std::path::Path,data:&[u8])->std::io::Result<()> {
+    use std::{io::Write,sync::{Mutex,atomic::{AtomicU64,Ordering}}};
+    static WRITER:Mutex<()>=Mutex::new(());
+    static SEQUENCE:AtomicU64=AtomicU64::new(0);
+    let _lock=WRITER.lock().unwrap_or_else(|e|e.into_inner());
+    std::fs::create_dir_all(cache)?;
+    let mut names:Vec<_>=std::fs::read_dir(cache)?.filter_map(Result::ok).map(|entry|entry.path()).filter(|p|p.file_name().and_then(|n|n.to_str()).is_some_and(|n|n.strip_suffix(".jpg").is_some_and(|stem|stem.len()==64&&stem.bytes().all(|b|b.is_ascii_hexdigit())))).collect();
+    names.sort();
+    for old in names.iter().take(names.len().saturating_sub(255)) {let _=std::fs::remove_file(old);}
+    let temporary=cache.join(format!(".preview-{}-{}.tmp",std::process::id(),SEQUENCE.fetch_add(1,Ordering::Relaxed)));
+    let result=(||{let mut f=std::fs::OpenOptions::new().create_new(true).write(true).open(&temporary)?;f.write_all(data)?;drop(f);std::fs::rename(&temporary,cached)})();
+    if result.is_err(){let _=std::fs::remove_file(&temporary);}
+    result
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn preview_cache_is_bounded_atomic_and_preserves_unrelated_files() {
+        let dir=tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("keep.txt"),b"keep").unwrap();
+        for i in 0..270 {
+            let path=dir.path().join(format!("{i:064x}.jpg"));
+            cache_preview(dir.path(),&path,b"complete jpeg fixture").unwrap();
+            assert_eq!(std::fs::read(path).unwrap(),b"complete jpeg fixture");
+        }
+        assert_eq!(std::fs::read(dir.path().join("keep.txt")).unwrap(),b"keep");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(),257);
+    }
 }

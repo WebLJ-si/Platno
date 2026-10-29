@@ -105,7 +105,15 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         owned_session=api('/api/playback/hls/start',{'path':str(video),'quality':'480'})
         slots=[api('/api/playback/hls/start',{'path':str(video),'quality':'480'}) for _ in range(3)]
         api('/api/playback/hls/start',{'path':str(video),'quality':'480'},status=429)
+        request('/api/playback/transcode?'+q+'&quality=480',status=429)
         for session in slots: api('/api/playback/hls/stop',{'id':session['id']})
+        for cycle in range(16):
+            session=api('/api/playback/hls/start',{'path':str(video),'quality':'480'})
+            directory=pathlib.Path(tempfile.gettempdir())/('smart-media-hls-'+session['id'])
+            assert directory.is_dir()
+            api('/api/playback/hls/stop',{'id':session['id']})
+            assert not directory.exists(),('stop must wait for FFmpeg and remove cache',cycle)
+        print('PASS: shared conversion limit and 16 immediate HLS start/stop/cleanup cycles',flush=True)
         second=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         api('/api/auth/login',{'email':'owner@example.test','password':'integration password 123'},opener=second)
         assert len(api('/api/auth/sessions')['items'])==2
@@ -136,6 +144,14 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         cases=run_regressions(api,request,db,base,video,direct)
         print(f'PASS: {len(cases)} additional API feature groups',flush=True)
         if '--browser' in sys.argv: subprocess.run(['node',str(ROOT/'scripts/browser.cjs'),url],check=True,timeout=180)
+        shutdown_client=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        api('/api/auth/login',{'email':'owner@example.test','password':'integration password 123'},opener=shutdown_client)
+        shutdown_session=api('/api/playback/hls/start',{'path':str(video),'quality':'480'},opener=shutdown_client)
+        shutdown_dir=pathlib.Path(tempfile.gettempdir())/('smart-media-hls-'+shutdown_session['id'])
+        proc.terminate();proc.wait(timeout=8)
+        assert proc.returncode==0,('graceful SIGTERM',proc.returncode)
+        assert not shutdown_dir.exists(),'graceful shutdown must remove active HLS cache'
+        print('PASS: SIGTERM with active playback reaps FFmpeg, removes cache and exits cleanly',flush=True)
         print('PASS: isolated HTTP, audio tracks + decoded language, removed-feature checks, direct ranges, three HLS variants, validation, atomic watched/reset, profile isolation')
     finally:
         proc.terminate()
