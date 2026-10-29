@@ -38,7 +38,7 @@ Alternatively, save the token in a private file named `tmdb-token` in the applic
 
 Install FFmpeg and ffprobe and make them available on `PATH` (on macOS, `brew install ffmpeg`). The application also checks the standard Homebrew locations. Optional `SMART_MEDIA_FFMPEG` and `SMART_MEDIA_FFPROBE` environment variables can specify the binaries. Choose a movie or a local file and press Play; the search view, collections, and episode list also offer file-level play buttons.
 
-H.264/AAC MP4 files are sent directly using HTTP byte ranges; other formats are transcoded on demand to H.264/AAC HLS using FFmpeg. The player prefers Media Source Extensions with the locally bundled HLS.js library and falls back to a browser's native HLS support where needed. The first playlist is held until it contains three segments, or the conversion finishes for a short video, to avoid asking a browser to decode an incomplete stream. Slow input waits up to two minutes for the first playable playlist; HLS.js waits up to three minutes per playlist or segment and retries recoverable network failures. The player shows elapsed wait time while the stream is starting. HLS sessions write temporary segments to the system temporary directory and are cleaned up when stopped or inactive. If direct playback fails in a browser, choose **Use compatible playback**. Use the seek bar when transcoding; the server starts a new conversion at the selected position. Playback progress and completion history are stored in SQLite per profile, so Continue Watching works after refreshes and across browsers. The dashboard recommends local movies or shows using shared words in their provider descriptions, based on items in your watch history; recommendations stay local and do not send viewing history to metadata providers. Only files already in the SQLite library may be streamed; source media is never changed. The player supports season and episode navigation for identified TV episodes, playback speed, 1080p/720p/480p quality choices, and embedded text or matching local text subtitles. Auto uses direct playback for supported originals and otherwise serves a master HLS playlist with 480p, 720p, and 1080p renditions. HLS.js or native HLS chooses the rendition; fixed quality remains available. Adaptive HLS encodes all three renditions concurrently, so it costs more CPU than fixed quality. The legacy progressive fallback converts to 1080p. The owner can select an H.264 encoder reported by FFmpeg. Each new conversion smoke-tests the selected encoder and falls back to `libx264` when it cannot initialize; GPU and device access still depend on the host and Docker runtime. The player offers separate audio/subtitle selectors, chapter navigation, preferred audio language per profile, two simultaneous text subtitle tracks, subtitle delay, and saved volume/speed. PQ/HLG sources are tone-mapped to SDR during conversion using FFmpeg zscale and tonemap filters; a build without those filters cannot convert HDR correctly. Image-based subtitles and Jellyfin client compatibility remain unsupported.
+H.264/AAC MP4 files are sent directly using HTTP byte ranges; other formats are transcoded on demand to H.264/AAC HLS using FFmpeg. The player prefers Media Source Extensions with the locally bundled HLS.js library and falls back to a browser's native HLS support where needed. The first playlist is held until it contains three segments, or the conversion finishes for a short video, to avoid asking a browser to decode an incomplete stream. Slow input waits up to two minutes for the first playable playlist; HLS.js waits up to three minutes per playlist or segment and retries recoverable network failures. The player shows elapsed wait time while the stream is starting. HLS sessions write temporary segments to the system temporary directory and are cleaned up when stopped or inactive. If direct playback fails in a browser, choose **Use compatible playback**. Use the seek bar when transcoding; the server starts a new conversion at the selected position. Playback progress and completion history are stored in SQLite per profile, so Continue Watching works after refreshes and across browsers. The dashboard recommends local movies or shows using shared words in their provider descriptions, based on items in your watch history; recommendations stay local and do not send viewing history to metadata providers. Only files already in the SQLite library may be streamed; source media is never changed. The player supports season and episode navigation for identified TV episodes, playback speed, 1080p/720p/480p quality choices, and embedded text or matching local text subtitles. Auto uses direct playback for supported originals and otherwise serves a master HLS playlist with 480p, 720p, and 1080p renditions. HLS.js or native HLS chooses the rendition; fixed quality remains available. Adaptive HLS encodes all three renditions concurrently, so it costs more CPU than fixed quality. The legacy progressive fallback converts to 1080p. The owner can select an H.264 encoder reported by FFmpeg. Each new conversion smoke-tests the selected encoder and falls back to `libx264` when it cannot initialize; GPU and device access still depend on the host and Docker runtime. The player shows an audio selector only for files with at least two embedded audio tracks, supports preferred audio language per profile, two simultaneous text subtitle tracks, subtitle delay, and saved volume/speed. PQ/HLG sources are tone-mapped to SDR during conversion using FFmpeg zscale and tonemap filters; a build without those filters cannot convert HDR correctly. Image-based subtitles and Jellyfin client compatibility remain unsupported.
 
 The playback design follows Jellyfin's documented direct-play/transcoding model but does not incorporate Jellyfin source code. Jellyfin is a separate GPL-licensed application; FFmpeg is an external executable with its own license.
 
@@ -71,19 +71,31 @@ This is a first implementation, not the full specification in the original brief
 
 ## New playback and library controls
 
-- Select an audio language/track and chapter in the player. Changing the audio track restarts conversion at the current position.
+- Select an audio language/track when a file contains multiple audio tracks. With zero or one track the selector stays hidden. Changing the track restarts conversion at the current position. Chapter navigation is not included.
 - Use Space/K to play/pause, arrows or J/L to seek, F for fullscreen, M to mute, C to cycle subtitles, and Shift+N for the next local available episode. Ctrl/Cmd+K focuses library search. The PiP button uses the browser's Picture-in-Picture support.
 - Near the end of an episode, the next-episode card appears. Automatic playback follows the profile setting and can be cancelled. The player skips duplicate entries for the current episode and unavailable files.
-- Administrators can save per-file intro/recap/credits ranges from **Skip markers** in the player. Exact chapter names Intro, Recap, Credits, Opening credits, and End credits are used when no manual configuration exists. Detection by comparing episode audio is not implemented.
 - Hover over the seek bar for a JPEG preview, generated on demand at 10-second intervals. Two jobs and 256 cached frames bound the work; frames are not pre-generated. Slow drives may not return a preview within the 15-second limit.
 - Movie/show details offer watched/reset actions for all local files or the selected season; advanced file details have per-file actions. Reset clears saved progress. Status belongs to the active profile.
 - Libraries can filter known genre/year/language/rating/runtime and unwatched status, sort titles, and choose a random title within the filters. Cached provider detail supplies extra fields when available. Unknown metadata is excluded from active filters. The added-date sort currently uses the last scan timestamp/mtime, not an immutable first-added date.
-- **Stats** shows stream details; **Report** saves a local issue for administrators. Settings includes tool/path health, library size, largest files, files needing attention, recent reports, and account-session revocation. Reports are bounded to 500 and rate-limited per profile; no external telemetry is sent.
+- **Stats** shows stream details. Settings includes tool/path health, library size, largest files, files needing attention and account-session revocation. The former playback-report UI and API have been removed; future maintainer issue handling and automatic subtitle matching/synchronization are tracked in [TODO.md](TODO.md).
 - Install the PWA from a supported browser over HTTPS or localhost. Its worker caches only the public offline page/icons/manifest, never authenticated HTML, APIs, artwork, or video. This provides an offline connection notice, not offline media playback.
 
 HLS sessions use random identifiers, belong to their creating profile, and are limited to four concurrent sessions globally. This cap does not cover legacy progressive responses; there is no per-account quota or queue yet. See [the complete review of all 163 proposal entries](docs/feature-review.md) for implemented, partial, existing, and deferred work. In particular parental controls, PGS/VobSub burn-in, external integrations, and native TV clients remain separate work.
 
+## Documentation
+
+Open **Help & documentation** in the application, or browse `/help`. The bundled Slovenian guide covers setup, accounts, libraries, scanning, playback, subtitles, PWA, diagnostics and troubleshooting.
+
+- [User guide (Slovenian)](docs/user-guide.sl.md)
+- [Development and architecture](docs/development.md)
+- [HTTP API reference](docs/api.md)
+- [Testing and coverage matrix](docs/testing.md)
+- [Deployment](docs/deployment.md)
+- [Backlog](TODO.md)
+
 ## Tests
+
+Run `python3 scripts/test.py` for the full release validation pipeline; add `--browser` when Playwright and Chrome are available. The runner writes a JSON report and uses disposable data. See the testing guide for exact coverage and gaps.
 
 ```sh
 cargo test
@@ -93,12 +105,15 @@ node tests/local-grouping.cjs
 node tests/movie-collections.cjs
 node tests/playback-strategies.cjs
 node tests/new-features.cjs
+node --test tests/player-controls.cjs
+python3 tests/help-renderer.py
+python3 scripts/render-help.py --check
 cargo build
 python3 scripts/integration.py
 ```
 
 The HTTP suite needs Python 3, FFmpeg, and ffprobe. It generates fictional local media, starts a separate server on an ephemeral localhost port with its own temporary SQLite data directory, and checks real decoded HLS audio/video, HDR mapping, thumbnails, validation, profile isolation, roles, session revocation, and conversion limits. It never uses the real server database or media library. No provider credentials are required.
 
-For the optional real Chrome UI suite, make the Node `playwright` package available (for example install it in a temporary tool directory and set `NODE_PATH` to that directory's `node_modules`), install Google Chrome, and run `python3 scripts/integration.py --browser`. It also tests the player, subtitles, diagnostics, keyboard use, and a 390-pixel mobile layout. The screenshot defaults to `/tmp/plexv2-mobile-regression.png`; set `PLEXV2_SCREENSHOT` to override it.
+For the optional real Chrome UI suite, make the Node `playwright` package available (for example install it in a temporary tool directory and set `NODE_PATH` to that directory's `node_modules`), install Google Chrome, and run `python3 scripts/integration.py --browser`. It also tests 0/1/2-track audio-selector visibility, removed controls, filters/search/watchlist, dual subtitles, diagnostics, sessions, keyboard use, a 390-pixel mobile layout, help and the offline worker. The screenshot defaults to `/tmp/plexv2-mobile-regression.png`; set `PLEXV2_SCREENSHOT` to override it.
 
 See [validation details and limits](docs/validation.md). These checks do not establish support for every browser/device or every real-world codec/HDR master.

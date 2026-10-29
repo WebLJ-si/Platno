@@ -4,13 +4,14 @@ Pregled izvornega dokumenta z dne 29. 10. 2026. Dokument je seznam idej; njegove
 
 Funkcije smo preverjali z Rust testi, izoliranim HTTP/FFmpeg okoljem in Chrome UI preizkusom. Za dejanske omejitve testiranja glej `validation.md`.
 
+Posodobitev 29. 10. 2026: po zahtevi uporabnika so ročni skip markerji, navigacija po poglavjih in lokalne prijave težav odstranjeni. Izbira zvoka ostaja vidna samo pri več sledih. Samodejno ujemanje/sinhronizacija podnapisov in prihodnji maintainer issue workflow sta v `TODO.md`.
 
 ## Najprej: 12 funkcij z največjim učinkom
 
 | Predlog | Presoja | Izvedba / razlog |
 | --- | --- | --- |
 | Izbira zvočne sledi. V popisu je označena kot neimplementirana, a je nujna: sinhronizacije, večjezični filmi, komentarji režiserja. | Uvedeno | Izbira zvočne sledi z jezikom/kodekom/kanali v HLS in progresivni pretvorbi. |
-| Skip Intro / Recap / Credits. Gumb med predvajanjem. Intro se zazna z ffmpeg (primerjava zvoka ali črnih okvirjev med epizodami) ali z ročno označbo časa. | Delno uvedeno | Ročni razponi intro/recap/credits in poimenovana poglavja. Samodejno primerjanje epizod še ni uvedeno. |
+| Skip Intro / Recap / Credits. Gumb med predvajanjem. Intro se zazna z ffmpeg (primerjava zvoka ali črnih okvirjev med epizodami) ali z ročno označbo časa. | Odstranjeno po zahtevi | Ročni markerji in njihovi API-ji so odstranjeni. Samodejnega zaznavanja ni. |
 | Naslednja epizoda z odštevanjem. Ob koncu špice se prikaže kartica z odštevanjem, kot pri Netflixu (post-play). | Uvedeno | Kartica, 10-sekundno odštevanje po nastavitvi profila, preklic in ročni začetek. |
 | Mark as watched / unwatched. Z enim klikom za film, epizodo, sezono ali serijo, plus ponastavitev napredka. | Uvedeno | Transakcijsko označevanje filma/datoteke/sezone/serije; unwatched izbriše položaj. |
 | HLS adaptive bitrate. Več kakovosti v master playlisti, da hls.js sam preklaplja glede na hitrost omrežja. | Uvedeno | Master playlist s 480/720/1080; hls.js izbira glede na omrežje. Native HLS izbira odjemalec. |
@@ -30,7 +31,7 @@ Funkcije smo preverjali z Rust testi, izoliranim HTTP/FFmpeg okoljem in Chrome U
 | Privzeta jezika zvoka in podnapisov po profilu (npr. zvok v izvirniku, podnapisi v slovenščini) | Uvedeno | Jezik zvoka po profilu in obstoječe nastavitve jezika/načina podnapisov. |
 | Picture-in-Picture in mini predvajalnik | Delno uvedeno | Brskalniški PiP z WebKit fallbackom; podpora je odvisna od brskalnika. Mini predvajalnik med brskanjem še ni uveden. |
 | Chromecast, AirPlay in DLNA predvajanje | Odloženo | Vsak protokol potrebuje odkrivanje naprav, receiver/sejo, varen dostop do toka in preizkus na fizični napravi. |
-| Poglavja (chapters) iz MKV/MP4 z oznakami na časovnici | Delno uvedeno | FFprobe prebere poimenovana poglavja; izbirnik omogoča preskok. Grafične oznake neposredno na drsniku še niso dodane. |
+| Poglavja (chapters) iz MKV/MP4 z oznakami na časovnici | Odstranjeno po zahtevi | Izbirnik poglavij in njegovi podatki v playback info so odstranjeni. |
 | Zapomni si zadnjo hitrost in glasnost | Uvedeno | Hitrost in glasnost se shranjujeta v profil; glasnost tudi lokalno kot fallback. |
 | Normalizacija glasnosti in nočni način (dinamična kompresija): tiho govorjenje, glasne eksplozije | Odloženo | Potrebuje preverjeno zvočno verigo za oba pretvornika in meritve glasnosti; ne spreminjamo zvoka brez jasne nastavitve. |
 | Prostorski zvok: ohranitev 5.1 in downmix v stereo, če odjemalec ne zmore | Delno obstoječe | Združljivi izvirniki ostanejo nespremenjeni; HLS downmix v stereo je preverjen. Večkanalna dostava zahteva odjemalski capability handshake. |
@@ -38,7 +39,7 @@ Funkcije smo preverjali z Rust testi, izoliranim HTTP/FFmpeg okoljem in Chrome U
 | Stil podnapisov: ozadje, rob, senca, položaj | Delno uvedeno | Velikost, barva, temno/prosojno ozadje in senca. Dvojni podnapisi imajo ločen položaj; poljubnega urejevalnika sloga še ni. |
 | Dvojni podnapisi hkrati (učenje jezikov) | Uvedeno | Dve različni besedilni sledi s skupnim časovnim zamikom in ločenima položajema. |
 | Prikaz "Statistika za nerde": kodek, bitrate, direct/transcode, razlog za transkodiranje | Uvedeno | Podatki toka, izbrana sled, kakovost, način in razlog za pretvorbo v predvajalniku. |
-| Gumb "Poročaj o težavi" ob predvajanju, ki zabeleži podatke o toku | Uvedeno | Lokalna prijava s strukturiranimi podatki toka; administratorjev pregled in omejena hramba. |
+| Gumb "Poročaj o težavi" ob predvajanju, ki zabeleži podatke o toku | Odstranjeno po zahtevi | Odstranjeni UI, API, lokalno shranjevanje prijav in administratorski seznam. Prihodnji workflow je v TODO.md. |
 | Preskok ±10 s z dvojnim klikom ali dotikom (mobilno) | Delno uvedeno | Dvojni klik na levo/desno polovico preskoči ±10 s. Mobilne drsne geste niso uvedene. |
 | Gesture kontrole: svetlost, glasnost, preskok z drsenjem | Odloženo | Potrebuje preizkuse konfliktov s scrollom, sistemskimi gestami in dostopnostjo na dejanskih telefonih. |
 | Shranjevanje položaja tudi ob zaprtju zavihka (sendBeacon) | Uvedeno | Položaj se pošlje ob close/pagehide/visibilitychange; keepalive fallback in profilni lokalni ključ. |
@@ -104,7 +105,7 @@ Funkcije smo preverjali z Rust testi, izoliranim HTTP/FFmpeg okoljem in Chrome U
 | Samodejni prenos manjkajočih podnapisov v želenem jeziku | Odloženo | Potrebuje podprt provider API, preverjanje ujemanja in potrjeno zapisovalno politiko medijskih map. |
 | Podpora za Podnapisi.net (priročno za slovenske podnapise) | Odloženo | Potrebuje podprt provider API, preverjanje ujemanja in potrjeno zapisovalno politiko medijskih map. |
 | Ocena ujemanja podnapisov glede na hash datoteke | Odloženo | Potrebuje podprt provider API, preverjanje ujemanja in potrjeno zapisovalno politiko medijskih map. |
-| Samodejna sinhronizacija podnapisov (npr. ffsubsync ali alass) | Odloženo | ffsubsync/alass nista del trenutnega runtime; potrebna sta čakalna vrsta in meritev ujemanja brez spreminjanja izvirnikov. |
+| Samodejna sinhronizacija podnapisov (npr. ffsubsync ali alass) | Odloženo | Zapisano v TODO.md z release matchingom, oceno zamika/drifta, predogledom in undo. ffsubsync/alass nista del trenutnega runtime; potrebna sta čakalna vrsta in meritev ujemanja brez spreminjanja izvirnikov. |
 | Pretvorba SRT/ASS/SSA v WebVTT z ohranjenim stilom | Delno obstoječe | FFmpeg pretvori besedilo v WebVTT; ASS napredni slog/animacije se ne ohranijo v celoti. |
 | Podpora za ASS animacije (npr. JASSUB) za anime | Odloženo | Nov adapter, identitete, cache, naročnine in pravila razreševanja nasprotujočih se rezultatov so samostojen razvojni sklop. |
 | Ročno nalaganje podnapisov med predvajanjem | Odloženo | Potrebuje omejen upload, validacijo, profilne pravice in ločen storage. |
@@ -209,7 +210,7 @@ Funkcije smo preverjali z Rust testi, izoliranim HTTP/FFmpeg okoljem in Chrome U
 | Predlog | Presoja | Izvedba / razlog |
 | --- | --- | --- |
 | Nadzorna plošča: CPU, RAM, disk, aktivni tokovi, FFmpeg procesi | Delno obstoječe | Aktivni tokovi in profilna dejavnost; dodani health/library podatki. CPU/RAM/FFmpeg sistemske metrike še niso. |
-| Pregled dnevnikov v vmesniku z iskanjem in filtri | Delno obstoječe | Scan dnevnik ter novi lokalni playback reports; globalni strežniški log viewer z iskanjem še ni. |
+| Pregled dnevnikov v vmesniku z iskanjem in filtri | Delno obstoječe | Scan dnevnik in server-health diagnostika; globalni strežniški log viewer z iskanjem še ni. |
 | Preverjanje zdravja: manjkajoči ffmpeg, token TMDB, dostopnost map | Delno uvedeno | Oznake kontrol, fokus, tipkovnica, statusna sporočila in reduced motion; to ni popoln WCAG audit. |
 | Samodejne posodobitve ali obvestilo o novi različici | Odloženo | Potrebuje verzionirane izdaje, podpisovanje in rollback. Docker ima dokumentiran ročni update. |
 | Docker slika in primer docker-compose | Delno uvedeno | Dockerfile in Compose z neprivilegiranim uporabnikom, read-only mediji in persistentnim data volume. Compose validacija uspe; build/run slike ni preverjen zaradi nedosegljivega Docker daemona. Javna registry slika ni objavljena. |
