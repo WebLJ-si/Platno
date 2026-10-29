@@ -156,7 +156,7 @@ pub(crate) fn principal(path: &PathBuf, headers: &HeaderMap) -> Option<Principal
 
 pub async fn guard(State(path): State<PathBuf>, mut req: Request<Body>, next: Next) -> Response {
     let uri = req.uri().path();
-    let public = matches!(uri,"/"|"/manifest.webmanifest"|"/sw.js"|"/offline.html") || uri.starts_with("/assets/") || matches!(uri, "/api/auth/setup-status" | "/api/auth/setup" | "/api/auth/login");
+    let public = matches!(uri,"/"|"/help"|"/manifest.webmanifest"|"/sw.js"|"/offline.html") || uri.starts_with("/assets/") || matches!(uri, "/api/auth/setup-status" | "/api/auth/setup" | "/api/auth/login");
     if let Some(p) = principal(&path, req.headers()) {
         let role_ok = if uri.starts_with("/api/owner/") || uri == "/api/subtitles/key" { p.role == "owner" }
             else if uri.starts_with("/api/admin/") { p.role == "owner" || p.role == "admin" }
@@ -425,6 +425,33 @@ mod tests {
         assert!(verify_password(&first,"a sufficiently long password"));
         assert!(!verify_password(&first,"another password"));
         assert_eq!(first.split('$').count(),4);
+    }
+    #[test]
+    fn malformed_hashes_and_unicode_hex_are_rejected_without_panicking() {
+        for hash in ["", "bcrypt$123", "pbkdf2$0$00$00", "pbkdf2$999999999$00$00", "pbkdf2$600000$é0$00", "pbkdf2$600000$zz$00"] {
+            assert!(!verify_password(hash, "irrelevant password"), "{hash}");
+        }
+        assert!(unhex("é0").is_err());
+        assert!(unhex("abc").is_err());
+        assert_eq!(unhex("00ff10").unwrap(), vec![0,255,16]);
+    }
+    #[test]
+    fn password_lengths_and_pin_validation_enforce_boundaries() {
+        assert!(hash_password("short").is_err());
+        assert!(hash_password(&"x".repeat(1025)).is_err());
+        for pin in ["1234","12345678","0000"] { assert!(valid_pin(pin)); }
+        for pin in ["123","123456789","abcd","１２３４","12 34"] { assert!(!valid_pin(pin)); }
+    }
+    #[test]
+    fn cookies_accept_only_well_formed_session_tokens() {
+        let token="ab".repeat(32);
+        let mut headers=HeaderMap::new();
+        headers.insert(header::COOKIE,HeaderValue::from_str(&format!("other=1; smart_media_session={token}; third=2")).unwrap());
+        assert_eq!(request_token(&headers),Some(token));
+        for value in ["smart_media_session=abc","smart_media_session=xyz","wrong_cookie=123"] {
+            headers.insert(header::COOKIE,HeaderValue::from_str(value).unwrap());
+            assert!(request_token(&headers).is_none());
+        }
     }
     #[test]
     fn only_one_owner_can_be_created() {

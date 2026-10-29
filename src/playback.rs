@@ -130,9 +130,8 @@ async fn probe_file_with(path: &std::path::Path, ffprobe: &str) -> Result<Value,
             .args([
                 "-v",
                 "error",
-                "-show_chapters",
                 "-show_entries",
-                "format=duration,format_name,bit_rate:stream=index,codec_type,codec_name,channels,channel_layout,width,height,color_transfer:stream_tags=language,title:chapter=start_time,end_time:chapter_tags=title",
+                "format=duration,format_name,bit_rate:stream=index,codec_type,codec_name,channels,channel_layout,width,height,color_transfer:stream_tags=language,title",
                 "-of",
                 "json",
             ])
@@ -234,7 +233,7 @@ pub async fn info(State(app): State<App>, Query(q): Query<MediaQuery>) -> Respon
                     subtitles.push(json!({"id":format!("file:{i}"),"label":name}));
                 }
             }
-            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"hdr":hdr,"chapters":data["chapters"],"bit_rate":data["format"]["bit_rate"]})).into_response()
+            Json(json!({"duration":duration,"direct":direct,"video_codec":video.map(|x|x["codec_name"].clone()),"audio_codec":audio.map(|x|x["codec_name"].clone()),"subtitles":subtitles,"audio_tracks":audio_tracks,"hdr":hdr,"bit_rate":data["format"]["bit_rate"]})).into_response()
         }
     }
 }
@@ -630,6 +629,35 @@ mod tests {
         let output = String::from_utf8(shift_webvtt(source, 3.0)).unwrap();
         assert!(output.contains("00:00:00.000 --> 00:00:03.000"));
         assert!(output.contains("00:00:05.000 --> 00:00:06.000"));
+    }
+    #[test]
+    fn byte_ranges_reject_malformed_overflow_and_empty_files() {
+        for range in ["", "bytes=", "bytes=-0", "bytes=5-1", "bytes=18446744073709551616-", "bytes=0-1,3-4", "items=0-1"] {
+            assert_eq!(parse_range(range,10),None,"{range}");
+        }
+        assert_eq!(parse_range("bytes=0-",0),None);
+        assert_eq!(parse_range("bytes=-99",10),Some((0,9)));
+        assert_eq!(parse_range("bytes=8-99",10),Some((8,9)));
+    }
+    #[test]
+    fn subtitle_shift_drops_expired_cues_and_preserves_settings_and_unicode() {
+        let source="WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nExpired\n\ncue-2\n00:00:04.000 --> 00:00:07.500 line:80%\nŽivjo čšž\n";
+        let output=String::from_utf8(shift_webvtt(source.as_bytes(),3.0)).unwrap();
+        assert!(output.starts_with("WEBVTT"));
+        assert!(!output.contains("Expired"));
+        assert!(output.contains("00:00:01.000 --> 00:00:04.500 line:80%"));
+        assert!(output.contains("cue-2"));
+        assert!(output.contains("Živjo čšž"));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn invalid_probe_output_and_missing_executable_are_actionable() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory=tempfile::tempdir().unwrap();let media=directory.path().join("video");std::fs::write(&media,b"fixture").unwrap();
+        let missing=probe_file_with(&media,"/definitely/missing/ffprobe").await.unwrap_err();
+        assert!(missing.contains("ffprobe is unavailable"));
+        let mock=directory.path().join("probe");std::fs::write(&mock,"#!/bin/sh\nprintf 'invalid json'\n").unwrap();std::fs::set_permissions(&mock,std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(probe_file_with(&media,mock.to_str().unwrap()).await.unwrap_err().contains("Invalid media information"));
     }
     #[test]
     fn byte_ranges() {

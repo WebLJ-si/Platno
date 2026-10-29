@@ -1,64 +1,8 @@
-use crate::{auth::Principal, db, playback, App};
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Extension, Json,
-};
-use serde::Deserialize;
+use crate::{db, playback, App};
+use axum::{extract::State, Json};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-pub fn init(c: &rusqlite::Connection) {
-    c.execute_batch("CREATE TABLE IF NOT EXISTS playback_reports(id INTEGER PRIMARY KEY,profile_id INTEGER NOT NULL,path TEXT NOT NULL,message TEXT NOT NULL,details TEXT NOT NULL,created_at INTEGER NOT NULL);").unwrap();
-}
-#[derive(Deserialize)]
-pub struct Report {
-    path: String,
-    message: String,
-    mode: String,
-    quality: String,
-    video_codec: Option<String>,
-    audio_codec: Option<String>,
-}
-pub async fn report(
-    State(app): State<App>,
-    Extension(p): Extension<Principal>,
-    Json(input): Json<Report>,
-) -> Response {
-    if playback::library_path(&app, &input.path).is_none() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    if input.message.trim().is_empty()
-        || input.message.len() > 2000
-        || !matches!(input.mode.as_str(), "direct" | "transcode")
-        || !matches!(input.quality.as_str(), "auto" | "1080" | "720" | "480")
-        || input.video_codec.as_ref().is_some_and(|s| s.len() > 64)
-        || input.audio_codec.as_ref().is_some_and(|s| s.len() > 64)
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let c = db(&app);
-    let now = chrono::Utc::now().timestamp();
-    let recent: i64 = c
-        .query_row(
-            "SELECT COUNT(*) FROM playback_reports WHERE profile_id=?1 AND created_at>?2",
-            rusqlite::params![p.profile_id, now - 10],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    if recent > 0 {
-        return StatusCode::TOO_MANY_REQUESTS.into_response();
-    }
-    let details = json!({"mode":input.mode,"quality":input.quality,"video_codec":input.video_codec,"audio_codec":input.audio_codec});
-    if c.execute("INSERT INTO playback_reports(profile_id,path,message,details,created_at) VALUES(?1,?2,?3,?4,?5)",rusqlite::params![p.profile_id,input.path,input.message.trim(),details.to_string(),now]).is_err() {return StatusCode::INTERNAL_SERVER_ERROR.into_response();}
-    let _=c.execute("DELETE FROM playback_reports WHERE id NOT IN (SELECT id FROM playback_reports ORDER BY id DESC LIMIT 500)",[]);
-    Json(json!({"ok":true})).into_response()
-}
-pub async fn reports(State(app): State<App>) -> Json<Value> {
-    let items:Vec<Value>=db(&app).prepare("SELECT r.id,r.path,r.message,r.details,r.created_at,p.name FROM playback_reports r LEFT JOIN profiles p ON p.id=r.profile_id ORDER BY r.id DESC LIMIT 100").and_then(|mut s|s.query_map([],|r|{let details:String=r.get(3)?;Ok(json!({"id":r.get::<_,i64>(0)?,"path":r.get::<_,String>(1)?,"message":r.get::<_,String>(2)?,"details":serde_json::from_str::<Value>(&details).unwrap_or_default(),"created_at":r.get::<_,i64>(4)?,"profile":r.get::<_,Option<String>>(5)?}))})?.collect()).unwrap_or_default();
-    Json(json!({"items":items}))
-}
 async fn version(name: &str) -> Value {
     let mut cmd = tokio::process::Command::new(playback::binary(name));
     cmd.arg("-version").kill_on_drop(true);
