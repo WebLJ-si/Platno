@@ -1,6 +1,8 @@
 # Platno
 
-**Your own media server in one file.** Platno scans the video folders on your computer or NAS, recognises your movies and series, and plays them in any browser, on your own hardware, without touching your files and without an account anywhere.
+**A free, open-source media server for your own hardware, written in Rust. The Plex alternative for people who run a homelab.**
+
+<p align="center"><b><a href="#why-platno">Why Platno</a></b> &nbsp;·&nbsp; <b><a href="#install">Install</a></b> &nbsp;·&nbsp; <b><a href="#more-info">More info</a></b></p>
 
 [![CI](https://github.com/WebLJ-si/Platno/actions/workflows/ci.yml/badge.svg)](https://github.com/WebLJ-si/Platno/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/WebLJ-si/Platno)](https://github.com/WebLJ-si/Platno/releases/latest)
@@ -9,6 +11,15 @@
 
 ## Why Platno
 
+A homelab is supposed to be yours: your hardware, your files, no meter running. Plex has moved in the other direction. Streaming your own library away from home now needs a paid pass ([Plex Pass or a Remote Watch Pass](https://forums.plex.tv/t/remote-streaming-will-be-a-plex-pass-feature/909369)), and your server depends on their account system. That defeats the purpose of running it yourself.
+
+Platno does the same job without a subscription, without an account anywhere, and without a company in the middle. You run one program, your friends and family sign in to *your* server, and nothing leaves your network unless you decide it should.
+
+> **Platno is an open-source project backed by [WebLJ.si](https://weblj.si). Anyone is welcome to take part:** report a problem, suggest a feature, improve the docs or send code. See [Contributing](#contributing).
+
+What you get:
+
+- **Built in Rust for speed and a small footprint.** Platno is one native program of about 20 MB with no Node, Java or Python runtime and no separate database server to run. It starts in a moment and is designed to stay light on modest hardware such as a Raspberry Pi or a NAS. Video conversion is done by FFmpeg, so heavy transcoding still depends on your processor.
 - **Nothing to build.** Download a ready-to-run program for Linux, macOS or Windows, install a `.deb`, or start the Docker image. No Rust, no compiler.
 - **Works without any account or key.** Series come from TVmaze, movies from the free Wikidata source, and anything unrecognised keeps the name from its file name. Add a free TMDB key later for posters and ratings.
 - **You stay in control.** Edit any title's name, details, cover and episodes by hand; edits survive rescans. Media files are read in place and never changed.
@@ -19,6 +30,8 @@
 - **Private.** No telemetry in normal builds. The only outside requests are metadata lookups (TVmaze, Wikidata, optionally TMDB and OpenSubtitles) with the title being searched.
 
 ![First-run guide](docs/images/first-run-guide.png)
+
+---
 
 ## Install
 
@@ -53,13 +66,17 @@ volumes:
 
 Start it with `docker compose up -d`. The container runs as UID 10001, so your media must be readable by that user. Update with `docker compose pull && docker compose up -d`. Each release page lists every Docker setting. Building the image yourself from this checkout: `docker compose up -d --build` (see [docs/deployment.md](docs/deployment.md)).
 
-## Updating
+### Updating
 
 - **Programs:** Settings → Updates → *Check for updates* → *Install and restart*.
 - **Debian/Ubuntu:** install the newer `.deb`.
 - **Docker/Synology:** `docker compose pull && docker compose up -d`.
 
-## Documentation
+---
+
+## More info
+
+### Documentation
 
 | | |
 | --- | --- |
@@ -72,7 +89,7 @@ Start it with `docker compose up -d`. The container runs as UID 10001, so your m
 | [Testing](docs/testing.md), [Validation](docs/validation.md), [Development](docs/development.md) | For contributors |
 | [Backlog](TODO.md), [Changelog](CHANGELOG.md) | What is planned and what changed |
 
-## Settings you may want
+### Settings you may want
 
 | Variable | Purpose |
 | --- | --- |
@@ -86,7 +103,7 @@ Start it with `docker compose up -d`. The container runs as UID 10001, so your m
 
 The full list is in [.env.example](.env.example). The program does not read `.env` files.
 
-## Branches and testing
+### Branches and testing
 
 `main` is the stable line. The **`test`** branch runs the whole suite and builds every program and a `test` Docker image as downloadable build artifacts, but publishes no release. See [docs/releasing.md](docs/releasing.md).
 
@@ -95,10 +112,14 @@ python3 scripts/test.py            # Rust, JavaScript and HTTP/FFmpeg tests
 python3 scripts/test.py --browser  # plus real Chrome UI tests (needs Node playwright)
 ```
 
-## Acknowledgements and notices
+### Contributing
+
+Platno is built in the open and every kind of help is welcome: bug reports, feature ideas, translations of the documentation, testing on hardware we do not have (Windows, Synology, Raspberry Pi), and code. Open an [issue](https://github.com/WebLJ-si/Platno/issues) to start a conversation, or a pull request against the `test` branch. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run the tests.
+
+### Acknowledgements and notices
 
 Series metadata comes from [TVmaze](https://www.tvmaze.com/api) (CC BY-SA 4.0), free movie data from [Wikidata](https://www.wikidata.org) (CC0), optional movie data from [TMDB](https://www.themoviedb.org), and optional subtitle search from [OpenSubtitles](https://www.opensubtitles.com).
 
 *This product uses the TMDB API but is not endorsed or certified by TMDB.* Platno is an independent project and is not affiliated with Plex, Jellyfin, TVmaze, TMDB, Wikidata or OpenSubtitles. Video conversion uses [FFmpeg](https://ffmpeg.org), which has its own licence. Each person uses their own provider keys; Platno never collects them.
 
-A licence for Platno itself has not been chosen yet. Until one is added to the repository, the usual copyright rules apply to the code.
+Platno is backed by [WebLJ.si](https://weblj.si). A licence for Platno itself has not been chosen yet. Until one is added to the repository, the usual copyright rules apply to the code.
