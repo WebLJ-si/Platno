@@ -1,5 +1,5 @@
 // Never cache authenticated HTML, API responses, artwork, or media.
-const CACHE='plexv2-shell-v1';
+const CACHE='plexv2-shell-v2';
 const PUBLIC=['/offline.html','/assets/icon-192.png','/assets/icon-512.png','/manifest.webmanifest'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(PUBLIC))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('plexv2-shell-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));

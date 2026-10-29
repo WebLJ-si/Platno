@@ -70,7 +70,7 @@ The runner builds a locked release executable and tests that executable. Each co
 | Activity dashboard | HTTP | heartbeat, active/off toggle and administrator reads |
 | Server health | HTTP + Chrome | tools, paths, catalogue totals and diagnostics UI |
 | Provider private storage | HTTP + Rust | status contains no token, private file permissions, missing-key errors; no live provider calls |
-| Mobile and accessibility | Chrome | 390px library/guide width, full-height player, focus, semantic labels, appearance/reduced motion |
+| Mobile and accessibility | Chrome | 320/390/768/1024/1920px library widths, mobile library menu open/select/Escape, 390px guide, full-height player, focus, semantic labels, appearance/reduced motion |
 | PWA | HTTP + Chrome | assets, manifest, installed worker, offline fallback and return online |
 | Help/docs | Python + HTTP + Chrome | generated parity, escaping, public access, readable mobile layout |
 | Removed features | Node + HTTP + Chrome | no marker/report/chapter controls or implementations, old routes 404, fresh database lacks removed tables |

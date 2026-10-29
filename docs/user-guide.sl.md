@@ -74,9 +74,9 @@ Collections vsebujejo tudi lokalne skupine, sklepane iz map in oštevilčenih da
 
 V podrobnostih naslova uporabite Add to Watchlist. Watchlist je shranjen na strežniku za aktivni profil. Remove odstrani naslov s seznama; ne izbriše datoteke in ne ponastavi zgodovine ogledov.
 
-Mark movie/series watched označi lokalne datoteke kot ogledane. Pri seriji lahko označite izbrano sezono. V naprednih podrobnostih obstajajo tudi dejanja za posamezno datoteko.
+Mark movie/series watched označi lokalne datoteke kot ogledane. Pri seriji lahko označite izbrano sezono z gumbom ob izbirniku sezone ali neposredno v vrstici sezone v katalogu. Dejanje zajame samo lokalne datoteke te sezone. V naprednih podrobnostih obstajajo tudi dejanja za posamezno datoteko.
 
-Mark unwatched / reset odstrani shranjeni položaj in oznako ogledanosti za izbrane datoteke. To vpliva tudi na Continue Watching. Ponastavitev ne posega v zgodovino drugih profilov.
+Mark unwatched / reset je prikazan samo, kadar je vsaj ena od izbranih lokalnih datotek označena kot ogledana. Gumb odstrani shranjeni položaj in oznako ogledanosti za izbrane datoteke. To vpliva tudi na Continue Watching. Ponastavitev ne posega v zgodovino drugih profilov.
 
 Continue Watching ponudi nadaljevanje shranjenega položaja. Ob ponovnem odpiranju videa lahko izberete Continue watching ali Start from beginning. Položaj se periodično shranjuje in dodatno pošlje ob zaprtju predvajalnika ali skrivanju zavihka. Ob nenadni izgubi napajanja zadnja sekunda ni zagotovljena.
 

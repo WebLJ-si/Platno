@@ -111,3 +111,21 @@ test('failed status polling releases the in-flight guard for recovery',async()=>
  vm.runInContext('let statusPolling=false,job={};authUser={role:"owner"}',h.context);
  await h.context.pollStatus();assert.equal(vm.runInContext('statusPolling',h.context),false);
 });
+
+test('watched actions distinguish untouched, partial, and fully watched titles',()=>{
+ const h=setup(['watchActionState']);h.context.watched=new Map();vm.runInContext('let watchedStates=watched',h.context);
+ const items=[{path:'season-1'},{path:'season-2'}];
+ assert.equal(h.context.watchActionState(items).anyWatched,false);
+ h.context.watched.set('season-1',{completed:false,position:30});assert.equal(h.context.watchActionState(items).anyWatched,false,'in-progress is not marked watched');
+ h.context.watched.set('season-1',{completed:true});assert.equal(h.context.watchActionState(items).anyWatched,true);assert.equal(h.context.watchActionState(items).allWatched,false);
+ h.context.watched.set('season-2',{completed:true});assert.equal(h.context.watchActionState(items).allWatched,true);
+ assert.equal(h.context.watchActionState([]).hasFiles,false);assert.equal(h.context.watchActionState([]).allWatched,false);
+});
+test('season watched/reset actions only change files in that season',()=>{
+ const h=setup(['markDetailSeason','markDetail']);let calls=[];
+ h.context.items=[{path:'s1e1',result:{season:1}},{path:'s1e2',result:{season:1}},{path:'s2e1',result:{season:2}}];vm.runInContext('let detailShowFiles=items',h.context);
+ h.context.markPaths=(paths,action)=>calls.push({paths:Array.from(paths),action});h.elements['#detail-season']={value:'2'};
+ h.context.markDetail('watched',true);assert.deepEqual(calls,[{paths:['s2e1'],action:'watched'}]);
+ h.context.markDetailSeason('reset',1);assert.deepEqual(calls[1],{paths:['s1e1','s1e2'],action:'reset'});
+ h.context.markDetailSeason('watched',99);h.elements['#detail-season'].value='';h.context.markDetail('watched',true);assert.equal(calls.length,2,'empty and absent seasons cannot change a different season');
+});

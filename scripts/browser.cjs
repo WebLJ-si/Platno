@@ -8,20 +8,22 @@ const playwright=require('playwright');
   page.on('pageerror',error=>errors.push(error.message));
   await page.goto(process.argv[2]);await page.locator('#email').fill('owner@example.test');await page.locator('#password').fill('integration password 123');await page.locator('form button').click();
   await page.locator('#account-controls .profile-trigger').waitFor();
+  // API regressions may leave these fixtures watched; start this UI scenario unwatched.
+  await page.evaluate(async()=>{await post('/api/playback/watched',{paths:files.map(f=>f.path),action:'reset'});await loadWatchedStates()});
   await page.keyboard.press('Control+k');assert.equal(await page.locator('#library-search').evaluate(el=>el===document.activeElement),true);
-  await page.getByRole('button',{name:/^Libraries/}).click();
-  await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();
+  const selectLibrary=async name=>{let menu=page.locator('#nav').getByRole('button',{name:/^Libraries/});if(await menu.getAttribute('aria-expanded')!=='true')await menu.click();await page.locator('#nav').getByRole('button',{name}).click()};
+  await selectLibrary(/^Movies/);
   await page.locator('.browse-controls').waitFor();await page.locator('.card').first().waitFor();
   assert.equal(await page.locator('.card').count(),3);
   // Browsing an empty library must not shrink global search or Overview's snapshot.
-  await page.locator('#nav').getByRole('button',{name:/^TV Shows/}).click();
+  await selectLibrary(/^TV Shows/);
   await page.locator('#app .empty').filter({hasText:'No titles match'}).waitFor();
   await page.locator('#library-search').fill('Fixture 1');
   await page.getByRole('heading',{name:'Fixture 1',exact:true}).first().waitFor();
   await page.locator('#library-search').fill('');
   await page.locator('#nav').getByRole('button',{name:'Overview',exact:true}).click();
   assert.equal(await page.evaluate(()=>files.length),3);
-  await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();
+  await selectLibrary(/^Movies/);
   await page.locator('.browse-controls').waitFor();await page.locator('.card').first().waitFor();
   await page.getByLabel('Year',{exact:true}).selectOption('2021');assert.equal(await page.locator('.card').count(),1);assert(await page.getByRole('heading',{name:'Fixture 1',exact:true}).isVisible());
   await page.getByLabel('Year',{exact:true}).selectOption('');await page.getByLabel('Genre',{exact:true}).selectOption('Comedy');assert.equal(await page.locator('.card').count(),2);
@@ -38,8 +40,9 @@ const playwright=require('playwright');
   await page.locator('.detail-files summary').click();await page.getByRole('button',{name:'Edit identification',exact:true}).click();
   await page.getByRole('heading',{name:'Edit identification',exact:true}).waitFor();assert.equal(await page.locator('#edit-query').inputValue(),'Fixture 0');
   await page.getByRole('button',{name:'Close',exact:true}).click();await page.locator('.card').filter({has:page.getByRole('heading',{name:'Fixture 0',exact:true})}).click();
-  await page.getByRole('button',{name:'✓ Mark movie watched',exact:true}).click();await page.locator('#watched-status').filter({hasText:'Marked as watched.'}).waitFor();
-  await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).click();await page.locator('#watched-status').filter({hasText:'progress cleared'}).waitFor();
+  assert(await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).isHidden());
+  await page.getByRole('button',{name:'✓ Mark movie watched',exact:true}).click();await page.locator('#watched-status').filter({hasText:'Marked as watched.'}).waitFor();assert(await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).isVisible());
+  await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).click();await page.locator('#watched-status').filter({hasText:'progress cleared'}).waitFor();assert(await page.getByRole('button',{name:'Mark unwatched / reset',exact:true}).isHidden());
   await page.getByRole('button',{name:'▶ Play movie',exact:true}).click();
   await page.locator('#player-audio option').nth(1).waitFor({state:'attached'});
   assert.equal(await page.locator('#player-chapter,#player-skip,.player-marker-editor').count(),0);
@@ -68,7 +71,7 @@ const playwright=require('playwright');
   const progress=await page.evaluate(async()=>{let d=await(await fetch('/api/playback/watched')).json();return d.items});assert(progress.length>0);
   await page.locator('#nav').getByRole('button',{name:'Watchlist',exact:true}).click();await page.locator('.watchlist-card').waitFor();
   await page.getByRole('button',{name:'Remove',exact:true}).click();await page.getByText('Your watchlist is empty.',{exact:true}).waitFor();
-  await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();await page.locator('.browse-controls').waitFor();
+  await selectLibrary(/^Movies/);await page.locator('.browse-controls').waitFor();
   for(const [name,count] of [['Fixture 1',1],['Fixture 2',0]]){
    await page.locator('.card').filter({has:page.getByRole('heading',{name,exact:true})}).click();await page.getByRole('button',{name:'▶ Play movie',exact:true}).click();
    await page.waitForFunction(()=>typeof playerState!=='undefined'&&!!playerState?.mediaInfo);
@@ -82,9 +85,20 @@ const playwright=require('playwright');
 
   await page.getByRole('button',{name:'Check server health',exact:true}).click();await page.locator('#diagnostic-output').filter({hasText:'FFmpeg: available'}).waitFor();
   await page.getByRole('button',{name:'Show sessions',exact:true}).click();await page.locator('#session-output').filter({hasText:'This device'}).waitFor();
-  await page.locator('#nav').getByRole('button',{name:/^Movies/}).click();await page.locator('.browse-controls').waitFor();
+  await selectLibrary(/^Movies/);await page.locator('.browse-controls').waitFor();
   await page.setViewportSize({width:390,height:844});
   await page.reload();await page.locator('#account-controls .profile-trigger').waitFor();await page.locator('.browse-controls').waitFor();
+  // Phone navigation survives re-rendering the clicked button and closes after selection.
+  const phoneLibraries=page.locator('#nav').getByRole('button',{name:/^Libraries/});
+  await phoneLibraries.click();await page.locator('#library-submenu').waitFor({state:'visible'});
+  await page.keyboard.press('Escape');assert.equal(await phoneLibraries.getAttribute('aria-expanded'),'false');
+  await selectLibrary(/^Movies/);await page.locator('.browse-controls').waitFor();
+  assert.equal(await phoneLibraries.getAttribute('aria-expanded'),'false');
+  for(const width of [320,390,768,1024,1920]){
+   await page.setViewportSize({width,height:844});
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`layout must not overflow at ${width}px`);
+  }
+  await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'mobile page must not overflow');
   await page.locator('.card').first().focus();await page.keyboard.press('Enter');assert(await page.locator('#dialog').evaluate(el=>el.open));
   await page.getByRole('button',{name:'Close',exact:true}).click();
@@ -104,5 +118,10 @@ const playwright=require('playwright');
   assert.deepEqual(errors,[]);
 
   console.log('PASS: Chrome UI login, library filters, watched/reset, 0/1/2 audio visibility, removed controls, filters/search/sort, watchlist, HLS quality/audio, dual subtitles, profile appearance, sessions, mobile layout, offline/help/logout');
+ } catch(error) {
+  for(const context of browser.contexts())for(const page of context.pages()){
+   console.error('Browser failure state:',await page.evaluate(()=>{let v=document.getElementById('player-video');return {status:document.getElementById('player-status')?.textContent,video:v?{time:v.currentTime,paused:v.paused,ended:v.ended,readyState:v.readyState,error:v.error?.message}:null}}).catch(()=>null));
+  }
+  throw error;
  } finally {await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});
