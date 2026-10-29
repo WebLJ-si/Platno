@@ -124,7 +124,7 @@ Posodobitev 29. 10. 2026: po zahtevi uporabnika so ročni skip markerji, navigac
 | Quick Connect: prijava na TV s 6-mestno kodo iz telefona | Odloženo | Avtentikacijski razvojni sklop s shranjevanjem/verifikacijo poverilnic, potekom/preklicem in obnovitvijo. Ne uvajamo nepreverjenega varnostnega mehanizma. |
 | Vabila za nove uporabnike s povezavo | Odloženo | Avtentikacijski razvojni sklop s shranjevanjem/verifikacijo poverilnic, potekom/preklicem in obnovitvijo. Ne uvajamo nepreverjenega varnostnega mehanizma. |
 | Dovoljenja po knjižnici: kdo vidi katero | Odloženo | Varnostno celovit sklop: potrebuje zanesljive starostne oznake ter strežniško omejitev vseh seznamov, metapodatkov, tokov in profilnih prehodov. Skrivanje UI bi ustvarilo lažen občutek zaščite. |
-| Omejitev števila hkratnih tokov po uporabniku | Delno uvedeno | HLS je globalno omejen na štiri seje, s profilnim lastništvom. Čakalna vrsta in kvote po uporabniku še niso uvedene. |
+| Omejitev števila hkratnih tokov po uporabniku | Delno uvedeno | HLS in progresivne pretvorbe si delijo štiri globalna mesta; HLS ima profilno lastništvo. Čakalna vrsta in kvote po uporabniku še niso uvedene. |
 | Omejitev bitrate pri oddaljenem dostopu | Delno obstoječe | Ročna kakovost in ABR omogočata nižji bitrate. Strežniška klasifikacija lokalno/oddaljeno in trda kvota še nista uvedeni. |
 | SSO/OIDC (Authelia, Authentik, Google) in LDAP | Odloženo | Avtentikacijski razvojni sklop s shranjevanjem/verifikacijo poverilnic, potekom/preklicem in obnovitvijo. Ne uvajamo nepreverjenega varnostnega mehanizma. |
 | API ključi za integracije | Odloženo | Avtentikacijski razvojni sklop s shranjevanjem/verifikacijo poverilnic, potekom/preklicem in obnovitvijo. Ne uvajamo nepreverjenega varnostnega mehanizma. |
@@ -170,7 +170,7 @@ Posodobitev 29. 10. 2026: po zahtevi uporabnika so ročni skip markerji, navigac
 | --- | --- | --- |
 | Predpomnilnik pretvorb (isti film večkrat ne transkodiraj) | Odloženo | Pretvorbe so vezane na uporabnikovo sled/seek/kakovost. Trajni cache potrebuje kvote, invalidacijo in življenjski cikel opravil. |
 | Predhodna pretvorba ("Optimized versions") ponoči | Odloženo | Pretvorbe so vezane na uporabnikovo sled/seek/kakovost. Trajni cache potrebuje kvote, invalidacijo in življenjski cikel opravil. |
-| Omejitev števila hkratnih transkodiranj in čakalna vrsta | Delno uvedeno | HLS je globalno omejen na štiri seje, s profilnim lastništvom. Čakalna vrsta in kvote po uporabniku še niso uvedene. |
+| Omejitev števila hkratnih transkodiranj in čakalna vrsta | Delno uvedeno | HLS in progresivne pretvorbe si delijo štiri globalna mesta; HLS ima profilno lastništvo. Čakalna vrsta in kvote po uporabniku še niso uvedene. |
 | Zaznava strojne pospešitve: NVENC, QSV, VAAPI, VideoToolbox, AMF z avtomatskim testom | Delno obstoječe | Izpis in smoke-test VideoToolbox/NVENC/QSV z libx264 fallbackom obstajata. VAAPI/AMF zahtevata fizično ciljno okolje. |
 | Direct Stream: samo sprememba zabojnika (MKV → fMP4), brez ponovnega kodiranja videa | Odloženo | Potrebuje capability negotiation in ločen remux načrt; sedanja preverjena skupna ciljna formata sta H.264/AAC in izvirni združljivi MP4. |
 | HEVC/AV1 direct play, kjer ga brskalnik podpira | Odloženo | Potrebuje capability negotiation in ločen remux načrt; sedanja preverjena skupna ciljna formata sta H.264/AAC in izvirni združljivi MP4. |

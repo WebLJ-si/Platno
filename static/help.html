@@ -44,7 +44,7 @@ Movies/Example Movie (2020)/Example.Movie.2020.mkv</code></pre>
 <p>Play odpre predvajalnik. Združljivi H.264/AAC MP4 se pošiljajo neposredno z HTTP byte-range zahtevami. Drugi formati se po potrebi pretvorijo v H.264/AAC. Predvajanje ne spremeni izvirnika.</p>
 <p>Auto pri pretvorbi HLS pripravi različice 480p, 720p in 1080p; predvajalnik izbira kakovost glede na razmere. Tri različice hkrati porabijo več procesorja. Na šibkem strežniku izberite fiksno kakovost 480p ali 720p. Pretvorba ne ustvari podrobnosti, ki jih ni v izvirniku.</p>
 <p>Če neposredno predvajanje odpove, predvajalnik poskusi združljivo pretvorbo. Convert jo lahko sproži tudi ročno, ko je možnost vidna. Dolgo nalaganje je lahko posledica odklopljenega diska, omrežne mape ali počasne pretvorbe; počakajte na sporočilo in uporabite Try again.</p>
-<p>HLS ima največ štiri sočasne seje na strežniku. Sporočilo o zasedenih mestih pomeni, da zaprite neuporabljeno predvajanje oziroma poskusite pozneje. To ni čakalna vrsta ali omejitev po računu. Stare progresivne pretvorbe te kvote ne uporabljajo.</p>
+<p>HLS in progresivna pretvorba si delita največ štiri sočasna mesta na strežniku. Sporočilo o zasedenih mestih pomeni, da zaprite neuporabljeno predvajanje oziroma poskusite pozneje. To ni čakalna vrsta ali omejitev po računu.</p>
 <p>HDR PQ/HLG se med pretvorbo preslika v SDR. FFmpeg mora vsebovati filtra zscale in tonemap. Pravilnost barv na vsakem dejanskem HDR posnetku ali zaslonu ni zagotovljena samo s tem, da je datoteka označena kot HDR.</p>
 <h2>Zvok</h2>
 <p>Izbirnik Audio track je viden samo, ko ima datoteka vsaj dve zvočni sledi. Med začetnim branjem informacij in pri nič ali eni sledi je skrit.</p>

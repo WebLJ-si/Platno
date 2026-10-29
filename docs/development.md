@@ -31,9 +31,9 @@ The route guard restores a principal from an opaque cookie whose SHA-256 hash is
 
 Library browsing reads the saved catalogue without synchronously probing every mounted drive. Availability is checked separately. A path that cannot be opened is unavailable, not necessarily deleted.
 
-On Play, the browser loads FFprobe metadata (cached by file signature), checks direct compatibility and restores profile progress. H.264/AAC MP4 uses range streaming. Conversion uses the selected audio ordinal and fixed quality or adaptive HLS. HLS jobs have random IDs and profile ownership; globally four slots are available. Temporary HLS segments are removed when a session stops or expires.
+On Play, the browser loads FFprobe metadata (cached by file signature), checks direct compatibility and restores profile progress. H.264/AAC MP4 uses range streaming. Conversion uses the selected audio ordinal and fixed quality or adaptive HLS. HLS jobs have random IDs and profile ownership; HLS and progressive conversions share four global slots. Temporary HLS segments are removed when a session stops or expires.
 
-Auto HLS prepares three renditions concurrently. It is network-adaptive at the client, not a promise that the server can encode every source in real time. The old progressive fallback is fixed quality and does not share the HLS slot cap. Tone mapping depends on FFmpeg filters and the source's HDR metadata.
+Auto HLS prepares three renditions concurrently. It is network-adaptive at the client, not a promise that the server can encode every source in real time. The progressive fallback is fixed quality and shares the same conversion slot cap. Tone mapping depends on FFmpeg filters and the source's HDR metadata.
 
 Embedded text subtitles are converted to WebVTT. Local sidecars are selected from the catalogue's allowed basenames rather than arbitrary request paths. Client-side delay is applied from original cue times so adjustments do not accumulate. A second distinct text track uses a separate screen position.
 
@@ -87,3 +87,9 @@ See `docs/testing.md` for coverage and limitations. Tests are organized around o
 Keep changes focused. Add a failing regression when fixing a reproducible behavior bug, cover both the authorized action and relevant invalid/unauthorized action, and update public docs when behavior changes. Use synthetic fixtures and cached fictional provider responses instead of a contributor's actual media library.
 
 Use `git diff --check`, inspect staged files, and keep generated artifacts, credentials and private output out of commits. No automatic deployment or restart is performed by the test runner. A successful test build does not update an already running binary.
+
+## Reliability and operational limits
+
+Child processes have bounded captured output and timeouts; cancelled streams schedule termination and wait for child exit before releasing their conversion permit. One HLS reaper manages idle sessions; explicit stop and SIGTERM/SIGINT shut down active HLS children before removing their temporary directories. Direct streams, FFprobe, subtitle conversion, password hashing and preview jobs have separate concurrency limits. The server returns a busy response rather than enqueueing work without bound. Preview files are published atomically; expired authentication attempts and old probe-cache entries are pruned periodically.
+
+Scanner writes and library/account operations use transactions where a partial update would lose associations or invalidate credentials. The scanner rechecks manual locks at the actual write. Availability is rechecked after a minute when file lists are requested; unreachable filesystem calls may still block in the operating system. SQLite access is still synchronous in several async request handlers and uses a busy timeout; heavy database lock contention is an outstanding architecture limitation. Abrupt process or machine termination may leave HLS temporary directories, because graceful cleanup cannot run after SIGKILL or power loss. Service managers and monitored backups remain necessary; this is not proof of multi-day stability.

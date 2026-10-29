@@ -56,7 +56,7 @@ The runner builds a locked release executable and tests that executable. Each co
 | Quality and audio | Node + Chrome | changing quality preserves alternate track; Auto direct decision respects audio |
 | Adaptive HLS | HTTP + Chrome | three playlists, playable segments, actual decode and selected audio |
 | Progressive conversion | HTTP | seek offset, H.264/AAC output, real decode |
-| HLS session safety | Rust + HTTP | random IDs, profile ownership, stop, expired/unknown IDs, allowlisted names, four slots |
+| HLS session safety | Rust + HTTP | random IDs, profile ownership, stop, expired/unknown IDs, allowlisted names, four shared conversion slots, 16 repeated starts/stops, graceful SIGTERM with active HLS |
 | HDR conversion | HTTP | synthetic PQ source, output BT.709, decode succeeds |
 | Embedded subtitles | HTTP + Chrome | WebVTT text, invalid stream rejection, two tracks loaded |
 | Sidecar subtitles | Rust + HTTP | allowed basename, UTF-8 content, seek retiming, invalid IDs/path input |
@@ -87,3 +87,5 @@ The native macOS folder chooser is intentionally not automatically invoked: it w
 A successful unit or HTTP test is not a performance/load audit. In particular concurrent HLS slot rejection is checked, but long-running CPU/GPU/disk stress and thumbnail contention are not benchmarked.
 
 Historical removed-feature tables in an upgraded database are left unused rather than destructively deleted. Fresh databases no longer create them. The test suite checks fresh-database absence and API removal.
+
+The reliability regressions additionally cover a manual lock arriving during scan identification, database rollback on simulated failures, concurrent login attempt updates, child process time/output limits, cancellation and reaping, preview cache bounds, reconnecting a file, and administrative polling under slow/failing responses. The full run is isolated and does not substitute for a multi-day production soak or device testing.

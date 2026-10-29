@@ -88,7 +88,7 @@ Auto pri pretvorbi HLS pripravi različice 480p, 720p in 1080p; predvajalnik izb
 
 Če neposredno predvajanje odpove, predvajalnik poskusi združljivo pretvorbo. Convert jo lahko sproži tudi ročno, ko je možnost vidna. Dolgo nalaganje je lahko posledica odklopljenega diska, omrežne mape ali počasne pretvorbe; počakajte na sporočilo in uporabite Try again.
 
-HLS ima največ štiri sočasne seje na strežniku. Sporočilo o zasedenih mestih pomeni, da zaprite neuporabljeno predvajanje oziroma poskusite pozneje. To ni čakalna vrsta ali omejitev po računu. Stare progresivne pretvorbe te kvote ne uporabljajo.
+HLS in progresivna pretvorba si delita največ štiri sočasna mesta na strežniku. Sporočilo o zasedenih mestih pomeni, da zaprite neuporabljeno predvajanje oziroma poskusite pozneje. To ni čakalna vrsta ali omejitev po računu.
 
 HDR PQ/HLG se med pretvorbo preslika v SDR. FFmpeg mora vsebovati filtra zscale in tonemap. Pravilnost barv na vsakem dejanskem HDR posnetku ali zaslonu ni zagotovljena samo s tem, da je datoteka označena kot HDR.
 
