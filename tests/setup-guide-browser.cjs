@@ -41,6 +41,26 @@ const PASSWORD = 'guide password 12345';
 
     // Media folders: existing and missing folders are told apart before saving.
     await primary(); await title('Where is your media');
+
+    // The folder browser works in any browser and any system: pick the folder from a list instead of typing it.
+    await page.locator('[data-act="choose-root"][data-n="0"]').click();
+    const picker = page.locator('dialog.fb'); await picker.waitFor();
+    await page.locator('#fb-path').fill(media); await page.locator('#fb-path').press('Enter');
+    await picker.locator('.fb-list button', { hasText: 'Movies' }).waitFor();
+    assert.equal(await picker.locator('.fb-list button').count(), 1, 'only folders are listed, never files');
+    await picker.locator('.fb-list button', { hasText: 'Movies' }).click();
+    await picker.locator('#fb-path').waitFor(); await page.waitForFunction(() => document.querySelector('#fb-path').value.endsWith('Movies'));
+    await page.locator('#fb-path').fill(path.join(media, 'nope')); await page.locator('#fb-path').press('Enter');
+    await page.locator('#fb-msg.bad').waitFor();
+    await page.locator('#fb-up').click();
+    await page.locator('#fb-cancel').click(); await picker.waitFor({ state: 'detached' });
+    assert.equal(await page.locator('.sg-root').count(), 0, 'cancelling adds nothing');
+    await page.locator('[data-act="choose-root"][data-n="0"]').click(); await picker.waitFor();
+    await page.locator('#fb-path').fill(path.join(media, 'Movies')); await page.locator('#fb-path').press('Enter');
+    await page.waitForFunction(() => document.querySelector('#fb-path').value.endsWith('Movies') && !document.querySelector('#fb-use').disabled);
+    await page.locator('#fb-use').click(); await picker.waitFor({ state: 'detached' });
+    await page.locator('.sg-root', { hasText: 'Movies' }).waitFor();
+    await page.locator('.sg-x').first().click();
     await page.locator('#sg-add-0').fill(path.join(media, 'Movies')); await page.locator('[data-act="add-root"][data-n="0"]').click();
     await page.locator('#sg-roots-0 .sg-pill[data-k="ok"]').waitFor();
     await page.locator('#sg-add-1').fill('/definitely/missing/folder'); await page.locator('[data-act="add-root"][data-n="1"]').click();

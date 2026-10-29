@@ -38,7 +38,7 @@ Example paths:
 D:\Media\Movies
 ```
 
-Browse opens the system folder chooser on macOS. On other systems type the paths by hand. In the example Docker setup use /media; host paths are not automatically the same inside the container.
+Browse opens a folder list in the page: it shows the folders of the computer or container that runs Platno (including drives on Windows and /media in Docker), so it works in any browser on any system. You can also type the path by hand. In the example Docker setup your media folders appear under /media; host paths are not automatically the same inside the container.
 
 After identification, Auto-sort places movies and series in the matching library. Other videos go to the selected target library. If you turn Auto-sort off you must choose a target library, and every scanned video goes into it.
 
@@ -88,7 +88,7 @@ Collections also contain local groups inferred from folders and numbered files. 
 
 In a title's details use Add to Watchlist. The watchlist is stored on the server for the active profile. Remove takes a title off the list; it does not delete the file and does not reset watch history.
 
-Mark movie/series watched marks local files as watched. For a series you can mark the selected season with the button next to the season selector, or directly in the season row of the catalogue. The action covers only the local files of that season. Per-file actions also exist in the advanced details.
+Mark movie/series watched marks local files as watched. For a series it covers all local files of the series. Per-file actions also exist in the advanced details.
 
 Mark unwatched / reset is shown only when at least one of the selected local files is marked watched. The button removes the saved position and the watched mark for the selected files. This also affects Continue Watching. Resetting does not touch the history of other profiles.
 

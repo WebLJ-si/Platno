@@ -41,6 +41,13 @@ const PASSWORD = 'seek password 12345';
       await page.waitForFunction(() => document.querySelector('#player-video').currentTime > 0.5 || playerState.mode === 'direct', null, { timeout: 20000 });
       const before = (await state()).value; await page.waitForTimeout(3500); const after = await state();
       assert(after.value >= before + 2, `${mode}: the bar follows playback after a seek (${before} -> ${after.value})`);
+      // Fullscreen takes the player area (a <dialog> itself cannot go fullscreen) and leaves again.
+      await page.mouse.move(640, 500); await page.locator('button[aria-label="Fullscreen"]').click();
+      await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 });
+      const fullscreen = await page.evaluate(() => { const r = document.querySelector('#player-shell').getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height), innerWidth, innerHeight]; });
+      assert.deepEqual(fullscreen.slice(0, 2), fullscreen.slice(2), `${mode}: the player fills the screen`);
+      await page.mouse.move(600, 450); await page.locator('button[aria-label="Fullscreen"]').click(); await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
+      await page.locator('#player-shell').focus(); await page.keyboard.press('f'); await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 }); await page.keyboard.press('f'); await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
       await page.evaluate(() => dialog.close()); await page.waitForTimeout(300);
     }
     assert.deepEqual(errors, []);

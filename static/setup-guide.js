@@ -265,15 +265,22 @@
     finish: async () => { await Promise.all([refreshProviders(), refreshLibs(), refreshServer(), api('/api/admin/accounts').then(a => { S.accounts = a.accounts || []; }), api('/api/owner/remote-access').then(r => { S.remote = r; })]); }
   };
 
+  function examplePath(name) {
+    const os = S.sys?.os || (navigator.platform || '').toLowerCase();
+    if (S.sys?.docker) return '/media/' + name;
+    if (/mac|darwin/.test(os)) return '/Volumes/Media/' + name;
+    if (/win/.test(os)) return 'D:\\Media\\' + name;
+    return '/mnt/media/' + name;
+  }
   function hintPaths() {
     const os = S.sys?.os || (navigator.platform || '').toLowerCase();
-    if (/mac|darwin/.test(os)) return 'On a Mac, an external drive looks like /Volumes/DriveName/Movies. Use Choose to pick a folder in a window.';
-    if (/win/.test(os)) return 'Enter the full path, for example D:\\Media\\Movies.';
-    return 'Enter the full path, for example /mnt/media/movies. In Docker, folders appear under /media.';
+    if (/mac|darwin/.test(os)) return 'On a Mac, an external drive looks like /Volumes/DriveName/Movies. Use Choose to pick it from a list.';
+    if (/win/.test(os)) return 'For example D:\\Media\\Movies. Use Choose to pick it from a list.';
+    return S.sys?.docker ? 'In Docker, your media folders appear under /media. Use Choose to pick one from a list.' : 'Enter the full path, for example /mnt/media/movies, or use Choose to pick it from a list.';
   }
   function libCard(l, n) {
     return `<section class="sg-card" data-stagger style="--i:${n + 3}"><div class="sg-card-h"><h3>${esc(l.name)}</h3><span class="badge">${esc(KIND[l.kind] || l.kind)}</span></div><p class="muted">${esc(KIND_HELP[l.kind] || '')}</p><ul class="sg-roots" id="sg-roots-${n}">${rootRows(n)}</ul>
-<div class="sg-add"><input id="sg-add-${n}" placeholder="/Volumes/Media/${esc(l.name)}" aria-label="Folder path for ${esc(l.name)}" autocomplete="off" spellcheck="false" data-enter="add-root" data-n="${n}"><button class="secondary" data-act="add-root" data-n="${n}">Add</button><button class="secondary" data-act="choose-root" data-n="${n}">Choose</button></div><p class="sg-msg" id="sg-msg-${n}" role="status"></p></section>`;
+<div class="sg-add"><input id="sg-add-${n}" placeholder="${esc(examplePath(l.name))}" aria-label="Folder path for ${esc(l.name)}" autocomplete="off" spellcheck="false" data-enter="add-root" data-n="${n}"><button class="secondary" data-act="add-root" data-n="${n}">Add</button><button class="secondary" data-act="choose-root" data-n="${n}">Choose</button></div><p class="sg-msg" id="sg-msg-${n}" role="status"></p></section>`;
   }
   function rootRows(n) {
     const l = S.libs[n];
@@ -415,12 +422,10 @@ SMART_MEDIA_TLS_KEY=/private/privkey.pem</pre><p class="muted">The hostname must
     },
     'choose-root': async b => {
       const n = Number(b.dataset.n);
-      msg('sg-msg-' + n, 'Choose a folder in the window that opened on the server…');
-      try {
-        const r = await post('/api/choose-folder', {});
-        if (r.cancelled) { msg('sg-msg-' + n, ''); return; }
-        $('#sg-add-' + n).value = r.path.replace(/\/$/, '') || '/'; msg('sg-msg-' + n, ''); ACT['add-root']({ dataset: { n } });
-      } catch (e) { msg('sg-msg-' + n, e.status === 501 ? 'The folder window works on macOS only. Type the full path instead.' : e.message, true); }
+      msg('sg-msg-' + n, '');
+      const path = await window.pickFolder();
+      if (!path) return;
+      $('#sg-add-' + n).value = path; ACT['add-root']({ dataset: { n } });
     },
     'remove-root': b => { S.libs[Number(b.dataset.n)].roots.splice(Number(b.dataset.k), 1); refreshRoots(Number(b.dataset.n)); },
     'save-libs': async () => {

@@ -188,12 +188,16 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     if start>0. && !input.compatible.unwrap_or(false){command.args(["-ss",&format!("{start:.3}")]);}
     command.arg("-i").arg(&path);
     if start>0. && input.compatible.unwrap_or(false){command.args(["-ss",&format!("{start:.3}")]);}
-    let adaptive=quality=="auto";
     let compatible=input.compatible.unwrap_or(false);
     let probe=playback::probe_file(&path).await.unwrap_or_default();
     // Resuming mid-file needs frame-exact cuts, so only a start from the beginning can be repackaged.
-    let copy=!adaptive && !compatible && start==0. && hdr.is_empty()
-        && playback::video_bitrate(&app,tiers[0]).is_some_and(|(width,height,_)|playback::copyable_video(&probe,width,height));
+    let can_repackage=!compatible && start==0. && hdr.is_empty();
+    // Auto: a video the browser already decodes goes out as one repackaged stream (the cheapest start there is); anything
+    // else gets a quality ladder that this machine can encode at once, because every rung costs processor time.
+    let repackage_auto=quality=="auto" && can_repackage && playback::copyable_video(&probe,1920,1080);
+    let adaptive=quality=="auto" && !repackage_auto;
+    let tiers: Vec<&str> = match (quality=="auto", repackage_auto) { (false,_)=>tiers, (true,true)=>vec!["1080"], (true,false)=>playback::auto_ladder(&encoder) };
+    let copy=can_repackage && (repackage_auto || (!adaptive && playback::video_bitrate(&app,tiers[0]).is_some_and(|(width,height,_)|playback::copyable_video(&probe,width,height))));
     let mut master=String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
     for tier in tiers {
         let (width,height,rate)=playback::video_bitrate(&app,tier).unwrap();

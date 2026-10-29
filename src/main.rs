@@ -994,44 +994,6 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
     );
     s.log(message);
 }
-// The browser cannot expose an absolute folder path through a file input.
-// Open a local native chooser instead; never interpolate browser input into AppleScript.
-async fn choose_folder() -> impl IntoResponse {
-    #[cfg(target_os = "macos")]
-    {
-        let result = crate::processes::output(tokio::process::Command::new("osascript").args(["-e","POSIX path of (choose folder with prompt \"Choose a media folder to scan\")"]),Duration::from_secs(300),16_384).await;
-        match result {
-            Ok(output) if output.status.success() => {
-                let path = String::from_utf8_lossy(&output.stdout)
-                    .trim_end_matches(['\r', '\n'])
-                    .to_owned();
-                (StatusCode::OK, Json(json!({"path":path})))
-            }
-            Ok(output) if String::from_utf8_lossy(&output.stderr).contains("-128") => {
-                (StatusCode::OK, Json(json!({"cancelled":true})))
-            }
-            Ok(output) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(
-                    json!({"error":format!("Folder chooser failed: {}", String::from_utf8_lossy(&output.stderr).trim())}),
-                ),
-            ),
-            Err(error) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":format!("Cannot open folder chooser: {error}")})),
-            ),
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            Json(
-                json!({"error":"The folder chooser is currently available on macOS. Enter an absolute path instead."}),
-            ),
-        )
-    }
-}
 async fn start(State(app): State<App>, Json(req): Json<ScanRequest>) -> impl IntoResponse {
     let mut s = app.status.lock().await;
     if s.running {
@@ -2019,6 +1981,7 @@ async fn main() {
         .route("/assets/icon-192.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-192.png").as_slice()) }))
         .route("/assets/icon-512.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-512.png").as_slice()) }))
         .route("/assets/updates.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/updates.js")) }))
+        .route("/assets/folder-browser.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/folder-browser.js")) }))
         .route("/assets/title-editor.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/title-editor.js")) }))
         .route("/assets/setup-guide.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/setup-guide.js")) }))
         .route("/assets/telemetry.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/telemetry.js")) }))
@@ -2051,6 +2014,7 @@ async fn main() {
         .route("/api/owner/update/apply", post(updater::apply))
         .route("/api/admin/provider-status", get(setup_guide::providers))
         .route("/api/admin/check-folder", post(setup_guide::check_folder))
+        .route("/api/admin/browse-folders", get(setup_guide::browse_folders))
         .route("/api/admin/title", post(free_metadata::edit_title))
         .route("/api/admin/episode", post(free_metadata::edit_episode))
         .route("/api/admin/covers", post(free_metadata::upload_cover).layer(axum::extract::DefaultBodyLimit::max(8_000_000)))
@@ -2072,7 +2036,6 @@ async fn main() {
             get(auth::progress_get).post(auth::progress_post),
         )
         .route("/api/scan", post(start))
-        .route("/api/choose-folder", post(choose_folder))
         .route("/api/cancel", post(cancel))
         .route("/api/status", get(status))
         .route("/api/override", post(update))

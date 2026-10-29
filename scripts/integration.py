@@ -59,9 +59,16 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         api('/api/playback/hls/start',{'path':str(video),'quality':'nope'},status=400)
         api('/api/playback/hls/start',{'path':'/etc/passwd'},status=404)
         api('/api/playback/hls/start',{'path':str(video),'audio':7},status=400)
-        hls=api('/api/playback/hls/start',{'path':str(video),'quality':'auto','audio':1})
+        # Auto on a video the browser already decodes, from the beginning: one repackaged stream, no ladder to encode.
+        single=api('/api/playback/hls/start',{'path':str(video),'quality':'auto','audio':1})
+        assert single['adaptive'] is False and single['url'].endswith('/index.m3u8'),single
+        assert '#EXTINF' in request(single['url'])[0].decode()
+        api('/api/playback/hls/stop',{'id':single['id']})
+        # Resuming mid-file needs real encoding: Auto then offers a ladder (480p and 720p, plus 1080p on machines with 8+ cores).
+        hls=api('/api/playback/hls/start',{'path':str(video),'quality':'auto','audio':1,'start':1})
+        assert hls['adaptive'] is True
         master=request(hls['url'])[0].decode(); variants=[line for line in master.splitlines() if line and not line.startswith('#')]
-        assert len(variants)==3,master
+        assert variants in (['v480.m3u8','v720.m3u8'],['v480.m3u8','v720.m3u8','v1080.m3u8']),master
         for variant in variants:
             playlist=request(hls['url'].rsplit('/',1)[0]+'/'+variant)[0].decode()
             segment=next(x for x in playlist.splitlines() if x and not x.startswith('#'))

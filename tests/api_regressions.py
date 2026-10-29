@@ -303,6 +303,18 @@ def run_regressions(api, request, db, base, video, direct):
         for path in ['/api/owner/system']:
             api(path, status=403, opener=admin); api(path, status=403, opener=user)
         api('/api/admin/check-folder', {'path': str(base)}, status=403, opener=user)
+        # The in-app folder browser lists folders only, and only for administrators.
+        (base / 'Zeta').mkdir(exist_ok=True); (base / '.hidden-folder').mkdir(exist_ok=True)
+        from urllib.parse import quote
+        listing = api('/api/admin/browse-folders?path=' + quote(str(base)))
+        names = [e['name'] for e in listing['entries']]
+        assert 'Zeta' in names and '.hidden-folder' not in names and video.name not in names and names == sorted(names, key=str.lower), names
+        assert listing['path'] == str(base) and listing['parent'] and listing['places'], listing
+        assert api('/api/admin/browse-folders')['path'], 'no path opens a default place'
+        for bad, code in [(str(video), 400), (str(base / 'missing-folder'), 404), ('relative/path', 400)]:
+            api('/api/admin/browse-folders?path=' + quote(bad), status=code)
+        api('/api/admin/browse-folders?path=' + quote(str(base)), opener=admin)
+        api('/api/admin/browse-folders?path=' + quote(str(base)), status=403, opener=user)
         for bad in ['0', '9', '-1', 'abc', '', '2.5']:
             api('/api/owner/settings', {'key': 'conversion_slots', 'value': bad}, status=400)
         assert api('/api/owner/settings', {'key': 'conversion_slots', 'value': '2'})['effective_conversion_slots'] == 2

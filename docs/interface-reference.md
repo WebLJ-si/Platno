@@ -212,8 +212,6 @@ Administrators and the owner see **✎ Edit details** next to the title's action
 - **Season**: selects the season.
 - **Episode**: selects an episode from the season; a missing episode is marked **Missing**.
 - **▶ Play episode**: plays the chosen episode when a local file is available for it. Otherwise the button is disabled.
-- **Mark selected season watched**: marks the files of the chosen season.
-- **Reset selected season**: resets the files of the chosen season.
 
 ### Aired episode catalogue
 
@@ -343,7 +341,7 @@ This part is visible to administrators and the owner.
 - **Automatically sort recognized movies and shows into their matching libraries**: automatically distributes recognized movies and series. If the option is off, scanned content goes to the chosen target library.
 - **Scan folders (one path per line)**: the list of server folders, one path per line.
 - **Save sorting and folders**: saves the automatic sorting and the folders.
-- **Browse folder…**: opens the system folder chooser on a supported server.
+- **Browse folder…**: opens a folder list in the page. It shows the folders of the machine that runs Platno with quick places (Docker `/media`, mounts, home, Windows drives), an *Up* button and an editable path. It lists folders only, skips hidden ones and works on every system.
 
 For each existing library:
 

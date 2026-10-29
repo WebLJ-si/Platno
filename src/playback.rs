@@ -125,6 +125,11 @@ pub async fn h264_encoder(app: &App) -> (String, Vec<&'static str>) {
     let encoder=if available.contains(&selected) && encoder_works(selected).await {selected.to_string()} else {"libx264".to_string()};
     (encoder,available)
 }
+// Qualities the Auto setting offers. Software encoding of the 1080p rung is only added on machines with processor to spare.
+pub(crate) fn auto_ladder(encoder:&str)->Vec<&'static str>{
+    let cores=std::thread::available_parallelism().map_or(2,|n|n.get());
+    if encoder!="libx264"||cores>=8 {vec!["480","720","1080"]} else {vec!["480","720"]}
+}
 pub fn encoder_options(encoder: &str) -> Vec<String> {
     let mut args=vec!["-c:v".to_string(),encoder.to_string()];
     match encoder {"h264_nvenc"=>args.extend(["-preset".into(),"p4".into(),"-tune".into(),"ll".into()]),"h264_qsv"=>args.extend(["-preset".into(),"veryfast".into()]),"h264_videotoolbox"=>args.extend(["-realtime".into(),"1".into(),"-allow_sw".into(),"1".into()]),_=>args.extend(["-preset".into(),"veryfast".into(),"-tune".into(),"zerolatency".into()])}
@@ -381,7 +386,8 @@ pub(crate) async fn audio_map(path: &std::path::Path, audio: Option<u32>) -> Res
     if index as usize >= count { return Err("This audio track is unavailable".into()); }
     Ok(format!("0:a:{index}"))
 }
-pub(crate) fn conversion_input_options(command:&mut Command,compatible:bool){command.args(["-fflags",if compatible{"+genpts+discardcorrupt"}else{"+genpts"},"-analyzeduration","20000000","-probesize","20000000"]);if compatible{command.args(["-err_detect","ignore_err"]);}}
+// The compatibility retry probes deeply; the first attempt only needs enough to open the streams the probe already found.
+pub(crate) fn conversion_input_options(command:&mut Command,compatible:bool){let (analyze,probe)=if compatible{("20000000","20000000")}else{("6000000","10000000")};command.args(["-fflags",if compatible{"+genpts+discardcorrupt"}else{"+genpts"},"-analyzeduration",analyze,"-probesize",probe]);if compatible{command.args(["-err_detect","ignore_err"]);}}
 pub async fn transcode(State(app): State<App>, Query(q): Query<MediaQuery>) -> Response {
     let Some(path) = library_path(&app, &q.path) else {
         return fail(StatusCode::NOT_FOUND, "File is not in the library");

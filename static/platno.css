@@ -28,10 +28,8 @@ dialog.player-dialog{max-width:1600px;width:96vw;border-radius:20px;padding:0;ba
 
 .poster{container-type:inline-size}.poster-fallback strong{font-size:24px;font-size:clamp(16px,14cqw,32px)}.overview-toolbar>button{white-space:nowrap}
 
-/* Watched actions stay beside the selected season and each season heading. */
-.season-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px 10px}.season-picker>label{grid-column:1/-1}.season-watch-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.detail-episode-picks .season-watch-actions button{min-height:48px;padding:10px 14px;font-size:11px;grid-column:auto;white-space:nowrap}.season-summary .season-watch-actions{margin-left:8px}.season-summary .season-watch-actions button{min-height:38px;padding:8px 12px;font-size:11px;white-space:nowrap}.season-summary .season-watch-actions:has(button:not([hidden])){flex-shrink:0}
-@media(max-width:1000px){.detail-episode-picks{grid-template-columns:1fr}.season-summary{flex-wrap:wrap}.season-summary .season-watch-actions{margin-left:auto}.season-picker{grid-template-columns:minmax(0,1fr) auto}}
-@media(max-width:360px){.season-picker{grid-template-columns:1fr}.season-picker .season-watch-actions{justify-content:flex-start}.season-summary .season-watch-actions{flex-basis:100%;margin:0 0 8px}}
+.season-picker{display:grid;gap:8px 10px}
+@media(max-width:1000px){.detail-episode-picks{grid-template-columns:1fr}.season-summary{flex-wrap:wrap}}
 
 /* Compact library totals never split across lines, including narrow phones. */
 .overview-stat{container-type:inline-size}.overview-stat strong{white-space:nowrap;overflow-wrap:normal;word-break:normal;font-size:clamp(18px,44cqw,72px)}
@@ -207,3 +205,29 @@ dialog.sg::backdrop{background:transparent;backdrop-filter:none}
 .edit-episode-fields{display:grid;grid-template-columns:90px 130px minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:8px}.edit-episode-fields label{display:grid;gap:4px;font-size:12px}.edit-episode-fields input{width:100%;min-height:44px}
 @media (max-width:760px){.edit-grid{grid-template-columns:1fr}.edit-episode-fields{grid-template-columns:1fr 1fr}.edit-episode-fields label:nth-child(3),.edit-episode-fields button{grid-column:1/-1}}
 .update-notes{max-height:220px;overflow:auto;white-space:pre-wrap;padding:12px 14px;background:#09090b;border:1px solid #303039;border-radius:10px;font:13px/1.6 var(--mono)}.update-instructions{padding:12px 14px;background:#1d1809;color:#f5d496;border:1px solid #3b2e13;border-radius:10px}
+/* Folder browser (static/folder-browser.js) */
+dialog.fb{width:min(560px,94vw);max-width:none;max-height:min(680px,88dvh);padding:20px;background:#111115;color:#f4f4f5;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+dialog.fb[open]{display:flex;flex-direction:column;gap:12px}
+.fb h2{margin:0;font-size:20px}.fb p{margin:0}
+.fb-places{display:flex;flex-wrap:wrap;gap:6px}.fb-places button{padding:6px 10px;font-size:12px}
+.fb-bar{display:flex;gap:8px}.fb-bar input{flex:1;min-width:0}.fb-bar button{flex:none}
+.fb-list{list-style:none;margin:0;padding:0;overflow:auto;flex:1;min-height:180px;border:1px solid var(--border);border-radius:10px}
+.fb-list li+li{border-top:1px solid #1d1d24}
+.fb-list li button{display:flex;align-items:center;gap:10px;width:100%;margin:0;padding:11px 12px;border-radius:0;background:none;color:inherit;font-weight:500;text-align:left}
+.fb-list li button:hover,.fb-list li button:focus-visible{background:#1c1c22}
+.fb-list li button svg{flex:none;color:var(--muted)}.fb-list li button span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fb-empty{padding:18px;color:var(--muted)}
+.fb-msg{min-height:1.3em;color:var(--muted);font-size:13px}.fb-msg.bad{color:#ff8a80}
+.fb-actions{display:flex;justify-content:flex-end;gap:8px}
+@media(prefers-reduced-motion:no-preference){dialog.fb[open]{animation:fb-in .16s cubic-bezier(.23,1,.32,1)}}
+@keyframes fb-in{from{opacity:0;transform:scale(.97)}}
+/* Loading screen of the player: spinner, what is happening, and how long it has taken */
+.player-message:empty{display:none}
+.player-loading{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#000a;pointer-events:none;text-align:center;padding:0 24px}
+.player-loading[hidden]{display:none}
+.pl-ring{width:68px;height:68px;border-radius:50%;border:4px solid #ffffff2b;border-top-color:var(--accent);animation:pl-spin .9s linear infinite;margin-bottom:8px}
+.pl-label{margin:0;font-size:18px;font-weight:700;color:#fff}
+.pl-hint{margin:0;min-height:1.4em;max-width:420px;font-size:14px;color:#c9c9d1}
+.pl-time{margin-top:12px;font:600 16px/1 var(--mono);color:#e4e4ea;font-variant-numeric:tabular-nums}
+@keyframes pl-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.pl-ring{animation:pl-pulse 1.6s ease-in-out infinite;border-color:var(--accent)}@keyframes pl-pulse{50%{opacity:.35}}}

@@ -7,7 +7,7 @@ import http.cookiejar, json, os, pathlib, re, socket, subprocess, sys, tempfile,
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 # Opens a native dialog or ends the session the fuzzer itself depends on.
-SKIP = {'/api/choose-folder', '/api/auth/logout', '/api/scan'}
+SKIP = {'/api/auth/logout', '/api/scan'}
 SAMPLES = {'id': '1', 'file': 'index.m3u8', 'name': 'x'}
 BODIES = [
     b'', b'null', b'[]', b'{}', b'"text"', b'0', b'true', b'{"path":null}', b'{"path":123}', b'{"path":"\\u0000"}',

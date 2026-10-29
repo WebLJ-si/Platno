@@ -94,7 +94,7 @@ Live TMDB/OpenSubtitles queries are not part of deterministic tests. Cached fict
 
 Chrome mobile viewport emulation is not physical iOS/Android/TV validation. Native Safari HLS, Firefox/Edge, OS fullscreen/Picture-in-Picture, hardware encoders, real HDR reference colors, slow network-share throughput and standalone PWA installation are not established by this suite. PiP/fullscreen browser APIs remain feature-detected; existing tests cover the surrounding player, not all operating-system behaviors.
 
-The native macOS folder chooser is intentionally not automatically invoked: it would open a system dialog. Manual identification provider success is exercised with fictional cached Rust fixtures; online search requires real provider availability.
+The folder browser is an in-page dialog, exercised in the first-run guide browser test and the API regression test. Manual identification provider success is exercised with fictional cached Rust fixtures; online search requires real provider availability.
 
 A successful unit or HTTP test is not a performance/load audit. In particular concurrent HLS slot rejection is checked, but long-running CPU/GPU/disk stress and thumbnail contention are not benchmarked.
 

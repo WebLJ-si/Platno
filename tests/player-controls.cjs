@@ -82,11 +82,11 @@ test('Picture-in-Picture unsupported and rejected paths show an actionable statu
  const h=setup(['togglePictureInPicture']);h.context.document={};await h.context.togglePictureInPicture();assert(h.elements['#player-status'].textContent.includes('unavailable'));
  h.video.requestPictureInPicture=async()=>{throw Error('denied')};await h.context.togglePictureInPicture();assert(h.elements['#player-status'].textContent.includes('Start playback first'));
 });
-test('fullscreen targets the dialog and exits when already active',async()=>{
- const h=setup(['toggleFullscreen']);let entered=0,exited=0;h.context.document={fullscreenElement:null,exitFullscreen:async()=>exited++};h.elements['#dialog']={requestFullscreen:async()=>entered++};await h.context.toggleFullscreen();assert.equal(entered,1);h.context.document.fullscreenElement={};await h.context.toggleFullscreen();assert.equal(exited,1);
+test('fullscreen targets the player area (a dialog cannot go fullscreen) and exits when already active',async()=>{
+ const h=setup(['toggleFullscreen']);let entered=0,exited=0;h.context.document={fullscreenElement:null,exitFullscreen:async()=>exited++};h.elements['#player-shell']={requestFullscreen:async()=>entered++};await h.context.toggleFullscreen();assert.equal(entered,1);h.context.document.fullscreenElement={};await h.context.toggleFullscreen();assert.equal(exited,1);
 });
 test('fullscreen rejection leaves the player usable with a clear message',async()=>{
- const h=setup(['toggleFullscreen']);h.context.document={};h.elements['#dialog']={requestFullscreen:async()=>{throw Error('not allowed')}};await h.context.toggleFullscreen();assert(h.elements['#player-status'].textContent.includes('not available'));
+ const h=setup(['toggleFullscreen']);h.context.document={};h.elements['#player-shell']={requestFullscreen:async()=>{throw Error('not allowed')}};await h.context.toggleFullscreen();assert(h.elements['#player-status'].textContent.includes('not available'));
 });
 test('completion timeupdate events stay throttled and seeking back resets completion',()=>{
  const h=setup(['savePlaybackProgress']);h.setState({path:'/fixture',mode:'direct',duration:100});
@@ -121,15 +121,6 @@ test('watched actions distinguish untouched, partial, and fully watched titles',
  h.context.watched.set('season-2',{completed:true});assert.equal(h.context.watchActionState(items).allWatched,true);
  assert.equal(h.context.watchActionState([]).hasFiles,false);assert.equal(h.context.watchActionState([]).allWatched,false);
 });
-test('season watched/reset actions only change files in that season',()=>{
- const h=setup(['markDetailSeason','markDetail']);let calls=[];
- h.context.items=[{path:'s1e1',result:{season:1}},{path:'s1e2',result:{season:1}},{path:'s2e1',result:{season:2}}];vm.runInContext('let detailShowFiles=items',h.context);
- h.context.markPaths=(paths,action)=>calls.push({paths:Array.from(paths),action});h.elements['#detail-season']={value:'2'};
- h.context.markDetail('watched',true);assert.deepEqual(calls,[{paths:['s2e1'],action:'watched'}]);
- h.context.markDetailSeason('reset',1);assert.deepEqual(calls[1],{paths:['s1e1','s1e2'],action:'reset'});
- h.context.markDetailSeason('watched',99);h.elements['#detail-season'].value='';h.context.markDetail('watched',true);assert.equal(calls.length,2,'empty and absent seasons cannot change a different season');
-});
-
 test('speech alignment keeps absolute timing across converted seeks and manual delay',()=>{
  const h=setup(['applySubtitleDelay']);vm.runInContext('const subtitleCueTimes=new WeakMap()',h.context);
  const cue={startTime:20,endTime:22},track={syncId:'file:0',syncBase:80,cues:[cue]};h.video.textTracks=[track];h.setState({mode:'transcode',offset:100,subtitleDelay:.5,subtitleAlignments:{'file:0':{scale:1.025,offset:4}}});
