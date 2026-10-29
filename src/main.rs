@@ -10,6 +10,7 @@ mod remote_access;
 mod setup_guide;
 mod subtitle_sync;
 mod telemetry;
+mod updater;
 use axum::{
     extract::{Path as AxPath, Query, State},
     http::{HeaderMap, StatusCode},
@@ -1972,6 +1973,12 @@ async fn reset_owner_password_cli()->Result<(),String>{
 }
 #[tokio::main]
 async fn main() {
+    match std::env::args().nth(1).as_deref() {
+        Some("--version"|"-V"|"version") => {println!("platno {}",env!("CARGO_PKG_VERSION"));return}
+        Some("--help"|"-h"|"help") => {println!("platno {}\n\nUsage: platno [reset-owner-password | --version]\n\nStarts the Platno media server. Settings come from environment variables such as\nSMART_MEDIA_DATA, SMART_MEDIA_HOST and SMART_MEDIA_PORT; see the documentation.",env!("CARGO_PKG_VERSION"));return}
+        _ => {}
+    }
+    updater::init();
     if std::env::args().nth(1).as_deref()==Some("reset-owner-password") {
         if let Err(error)=reset_owner_password_cli().await{eprintln!("Owner credential reset failed: {error}");std::process::exit(1)}
         return;
@@ -2011,6 +2018,7 @@ async fn main() {
         .route("/assets/jetbrains-mono.ttf", get(||async { ([(axum::http::header::CONTENT_TYPE,"font/ttf"),(axum::http::header::CACHE_CONTROL,"public, max-age=604800")],include_bytes!("../static/fonts/jetbrains-mono.ttf").as_slice()) }))
         .route("/assets/icon-192.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-192.png").as_slice()) }))
         .route("/assets/icon-512.png", get(||async { ([(axum::http::header::CONTENT_TYPE,"image/png")],include_bytes!("../static/icons/icon-512.png").as_slice()) }))
+        .route("/assets/updates.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/updates.js")) }))
         .route("/assets/title-editor.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/title-editor.js")) }))
         .route("/assets/setup-guide.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/setup-guide.js")) }))
         .route("/assets/telemetry.js", get(||async { ([(axum::http::header::CONTENT_TYPE,"application/javascript"),(axum::http::header::CACHE_CONTROL,"no-cache")],include_str!("../static/telemetry.js")) }))
@@ -2038,6 +2046,9 @@ async fn main() {
         .route("/api/owner/settings", get(auth::server_settings).post(auth::save_server_setting))
         .route("/api/owner/encoders", get(auth::owner_encoders))
         .route("/api/owner/system", get(setup_guide::system))
+        .route("/api/owner/update", get(updater::status))
+        .route("/api/owner/update/check", post(updater::check))
+        .route("/api/owner/update/apply", post(updater::apply))
         .route("/api/admin/provider-status", get(setup_guide::providers))
         .route("/api/admin/check-folder", post(setup_guide::check_folder))
         .route("/api/admin/title", post(free_metadata::edit_title))
@@ -2101,7 +2112,7 @@ async fn main() {
     tokio::pin!(server);
     tokio::select! {
         result=&mut server=>{result.unwrap();},
-        _=shutdown_signal()=>{
+        _=async {tokio::select!{_=shutdown_signal()=>{},_=updater::restart_requested()=>{}}}=>{
             app.cancel.store(true,Ordering::Release);
             let _=stop.send(());
             remote_access::shutdown().await;
@@ -2110,6 +2121,8 @@ async fn main() {
             let _=tokio::time::timeout(Duration::from_secs(10),&mut server).await;
         }
     }
+    // An update was installed: everything is closed, so start the new program in this one's place.
+    if updater::take_restart() {updater::restart_into_new_program()}
 }
 fn start_maintenance(app:App) {
     tokio::spawn(async move {

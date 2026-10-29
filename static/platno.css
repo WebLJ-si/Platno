@@ -206,3 +206,4 @@ dialog.sg::backdrop{background:transparent;backdrop-filter:none}
 .edit-episodes{display:grid;gap:10px;margin-top:12px}.edit-episode{padding:12px 14px;background:#141418;border:1px solid var(--border);border-radius:12px}
 .edit-episode-fields{display:grid;grid-template-columns:90px 130px minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:8px}.edit-episode-fields label{display:grid;gap:4px;font-size:12px}.edit-episode-fields input{width:100%;min-height:44px}
 @media (max-width:760px){.edit-grid{grid-template-columns:1fr}.edit-episode-fields{grid-template-columns:1fr 1fr}.edit-episode-fields label:nth-child(3),.edit-episode-fields button{grid-column:1/-1}}
+.update-notes{max-height:220px;overflow:auto;white-space:pre-wrap;padding:12px 14px;background:#09090b;border:1px solid #303039;border-radius:10px;font:13px/1.6 var(--mono)}.update-instructions{padding:12px 14px;background:#1d1809;color:#f5d496;border:1px solid #3b2e13;border-radius:10px}
