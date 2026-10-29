@@ -2,7 +2,7 @@
 
 **A free, open-source media server for your own hardware, written in Rust. The Plex alternative for people who run a homelab.**
 
-<p align="center"><b><a href="#why-platno">Why Platno</a></b> &nbsp;·&nbsp; <b><a href="#install">Install</a></b> &nbsp;·&nbsp; <b><a href="#more-info">More info</a></b></p>
+<p align="center"><sub><b>NAVIGATION</b></sub><br><b><a href="#why-platno">Why Platno</a></b> &nbsp;·&nbsp; <b><a href="#install">Install</a></b> &nbsp;·&nbsp; <b><a href="#more-info">More info</a></b></p>
 
 [![CI](https://github.com/WebLJ-si/Platno/actions/workflows/ci.yml/badge.svg)](https://github.com/WebLJ-si/Platno/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/WebLJ-si/Platno)](https://github.com/WebLJ-si/Platno/releases/latest)
@@ -10,6 +10,8 @@
 ![The Platno library](docs/images/library.png)
 
 ## Why Platno
+
+<p align="center"><sub><b>NAVIGATION</b></sub><br><a href="#why-platno">Why Platno</a> &nbsp;·&nbsp; <a href="#install">Install</a> &nbsp;·&nbsp; <a href="#more-info">More info</a> &nbsp;·&nbsp; <a href="#platno">Back to top</a></p>
 
 A homelab is supposed to be yours: your hardware, your files, no meter running. Plex has moved in the other direction. Streaming your own library away from home now needs a paid pass ([Plex Pass or a Remote Watch Pass](https://forums.plex.tv/t/remote-streaming-will-be-a-plex-pass-feature/909369)), and your server depends on their account system. That defeats the purpose of running it yourself.
 
@@ -34,6 +36,8 @@ What you get:
 ---
 
 ## Install
+
+<p align="center"><sub><b>NAVIGATION</b></sub><br><a href="#why-platno">Why Platno</a> &nbsp;·&nbsp; <a href="#install">Install</a> &nbsp;·&nbsp; <a href="#more-info">More info</a> &nbsp;·&nbsp; <a href="#platno">Back to top</a></p>
 
 Pick one. Every release lists these with checksums: **[Releases](https://github.com/WebLJ-si/Platno/releases/latest)**.
 
@@ -76,6 +80,8 @@ Start it with `docker compose up -d`. The container runs as UID 10001, so your m
 
 ## More info
 
+<p align="center"><sub><b>NAVIGATION</b></sub><br><a href="#why-platno">Why Platno</a> &nbsp;·&nbsp; <a href="#install">Install</a> &nbsp;·&nbsp; <a href="#more-info">More info</a> &nbsp;·&nbsp; <a href="#platno">Back to top</a></p>
+
 ### Documentation
 
 | | |
@@ -88,6 +94,23 @@ Start it with `docker compose up -d`. The container runs as UID 10001, so your m
 | [Releasing](docs/releasing.md) | How releases, the test branch and updates work |
 | [Testing](docs/testing.md), [Validation](docs/validation.md), [Development](docs/development.md) | For contributors |
 | [Backlog](TODO.md), [Changelog](CHANGELOG.md) | What is planned and what changed |
+
+### Accounts and passwords
+
+The first account you create is the **owner**. The owner can add administrators and users, and is the only one who can change passwords.
+
+- **Change a password or email:** sign in as the owner, open **Settings → Accounts**, and use *Save credentials* next to the account. For the owner's own account the current owner password is asked first. Changing a password signs that account out everywhere, so it has to sign in again.
+- **Add a person:** **Settings → Add an account** (email, temporary password, role). Give them a temporary password and change it later in the same place.
+- **Profiles have their own PIN** (4 to 8 digits), set when a profile is created. A user cannot change their own password; ask the owner.
+- **Forgot the owner password?** Stop Platno and run the reset command on the server. It asks for the new owner email and password (the password is not shown while you type) and signs the owner out everywhere:
+
+  | Installed as | Command |
+  | --- | --- |
+  | Program you downloaded | `platno reset-owner-password` |
+  | Debian or Ubuntu package | `sudo systemctl stop platno && sudo -u platno SMART_MEDIA_DATA=/var/lib/platno platno reset-owner-password && sudo systemctl start platno` |
+  | Docker | `docker compose exec -it platno platno reset-owner-password` |
+
+  If you use a custom `SMART_MEDIA_DATA`, set it the same way for the command.
 
 ### Settings you may want
 
