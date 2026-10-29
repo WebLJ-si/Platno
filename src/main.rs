@@ -1982,7 +1982,7 @@ async fn main() {
         db: dir.join("library.sqlite3"),
         client: Client::builder()
             .timeout(Duration::from_secs(12))
-            .user_agent("Platno/0.1 (+https://github.com/WebLJ-si/PlexV2)")
+            .user_agent("Platno/0.1 (+https://github.com/WebLJ-si/Platno)")
             .build()
             .unwrap(),
         status: Arc::new(Mutex::new(Job::default())),

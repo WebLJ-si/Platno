@@ -10,7 +10,7 @@ RUN cargo build --release --locked
 FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="Platno" \
       org.opencontainers.image.description="Local media library with a web player" \
-      org.opencontainers.image.source="https://github.com/WebLJ-si/PlexV2"
+      org.opencontainers.image.source="https://github.com/WebLJ-si/Platno"
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl && rm -rf /var/lib/apt/lists/* && useradd --uid 10001 --create-home media && mkdir /data && chown media:media /data
 COPY --from=build /build/target/release/smart-media-scanner /usr/local/bin/smart-media-scanner
 ENV SMART_MEDIA_HOST=0.0.0.0 SMART_MEDIA_PORT=8787 SMART_MEDIA_DATA=/data
