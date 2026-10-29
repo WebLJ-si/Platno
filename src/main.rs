@@ -2655,6 +2655,17 @@ mod integration_tests {
         assert_eq!(sibling["provider_id"], episode["provider_id"], "every episode of one show shares an identity");
     }
     #[tokio::test]
+    async fn wikidata_is_not_used_when_a_tmdb_key_is_saved() {
+        let (_temp, app) = fixture();
+        if std::env::var("TMDB_TOKEN").is_ok() { return; }
+        seed_cache(&app, "wikidata:search:the matrix", json!({"search": [{"id": "Q83495", "label": "The Matrix", "description": "1999 science fiction action film"}]}));
+        seed_cache(&app, "tmdb:movie:The Matrix", json!({"results": []}));
+        std::fs::write(app.db.parent().unwrap().join("tmdb-token"), "saved-test-token").unwrap();
+        let movie = identify(&app, &parse(Path::new("/Movies/The.Matrix.1999.mkv")), vec![]).await;
+        assert_eq!(movie["provider"], "local", "a saved key means TMDB decides; Wikidata stays out of it");
+        std::fs::remove_file(app.db.parent().unwrap().join("tmdb-token")).unwrap();
+    }
+    #[tokio::test]
     async fn hand_edits_survive_rescans_and_apply_to_new_episodes() {
         let (_temp, app) = fixture();
         if std::env::var("TMDB_TOKEN").is_ok() { return; }

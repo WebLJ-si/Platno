@@ -130,7 +130,7 @@ pub(crate) async fn wikidata_movie(app: &App, title: &str, year: Option<u32>) ->
 }
 
 /* ---------- identity for titles nothing recognised ---------- */
-// Runs after the online providers. A movie is tried on Wikidata (no key); anything still unmatched
+// Runs after the online providers. Without a TMDB key a movie is tried on Wikidata; anything still unmatched
 // keeps the name from its file name, so every title appears in the library and can be edited.
 pub(crate) async fn finish_unmatched(app: &App, p: &Parsed, result: &mut Value) {
     if !result["provider_id"].is_null() || !matches!(p.kind.as_str(), "movie" | "tv") {
@@ -139,7 +139,8 @@ pub(crate) async fn finish_unmatched(app: &App, p: &Parsed, result: &mut Value) 
     if result["explanation"].as_str().is_some_and(|e| e.contains("unavailable")) {
         result["lookup_failed"] = json!(true);
     }
-    if p.kind == "movie" && wikidata_enabled() {
+    // Wikidata is only the free stand-in for a missing key; with a TMDB key the name comes from the file.
+    if p.kind == "movie" && wikidata_enabled() && crate::tmdb_token(app).is_empty() {
         match wikidata_movie(app, &p.title, p.year).await {
             Ok(Some(found)) if found["provider_id"].as_i64().is_some() => {
                 for key in ["title", "year", "description", "runtime", "genres", "imdb_id", "provider_id"] {

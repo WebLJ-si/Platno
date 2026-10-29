@@ -46,7 +46,7 @@ A disconnected drive does not mean the files are deleted. A folder that cannot b
 
 ## Without API keys
 
-Platno works without any key. Series use TVmaze, which needs none. Movies are looked up on Wikidata, a free source, and matched only when the title (and year, if known) points to exactly one film; they get a name, year, runtime, genres and a short description, but no poster or rating. Anything that cannot be matched keeps the name taken from its file name and a default picture. Seasons and episodes are read from the file names either way, so every file stays in the library.
+Platno works without any key. Series use TVmaze, which needs none. When no TMDB key is saved, movies are looked up on Wikidata, a free source, and matched only when the title (and year, if known) points to exactly one film; they get a name, year, runtime, genres and a short description, but no poster or rating. Anything that cannot be matched keeps the name taken from its file name and a default picture. Seasons and episodes are read from the file names either way, so every file stays in the library.
 
 An administrator or the owner can open any title, press Edit details, and change the name, year, genres and description, upload a cover (JPEG, PNG or WebP up to 8 MB), and fix the season, episode number and title of every file. Edits apply to the whole title and are protected from rescans, and new episodes of an edited show join it. Adding a TMDB key later upgrades movies that were named from Wikidata or file names on the next scan, except those you edited by hand. Set `SMART_MEDIA_WIKIDATA=off` to stop the Wikidata lookups; the title searched is the only thing sent.
 
