@@ -2,6 +2,14 @@
 
 PlexV2 is a local video library with a web player. The server reads the folders you choose, tries to recognize movies and series, and lets you play them in the browser. It never renames, moves or overwrites your media files while scanning or playing.
 
+## Installing
+
+Download the ready-to-run program for your computer from the [releases page](https://github.com/WebLJ-si/Platno/releases/latest); no Rust or other build tools are needed. On Linux and macOS `curl -fsSL https://github.com/WebLJ-si/Platno/releases/latest/download/install.sh | sh` does it in one line. On Debian and Ubuntu install the `.deb` with `sudo apt install ./platno_VERSION_amd64.deb`; it sets up a service that starts at boot. With Docker use the image `ghcr.io/weblj-si/platno`. To build from source see the reference. Then continue with the first start below, replacing `cargo run --release --locked` by `platno`.
+
+## Updating
+
+The owner opens Settings, Updates, presses Check for updates, and then Install and restart. Platno downloads the official release, checks it against the published checksum, keeps the old program next to it as `platno.previous`, and restarts; accounts and libraries are untouched. Nothing is checked or installed unless the owner presses a button. Docker and Synology installs are updated with `docker compose pull && docker compose up -d`, and `.deb` installs by installing the newer `.deb`; there the Updates panel shows the exact command. `SMART_MEDIA_UPDATE_CHECK=off` removes the feature.
+
 ## First start
 
 You need Rust with Cargo, plus FFmpeg and ffprobe that the server can reach. From the project root run:

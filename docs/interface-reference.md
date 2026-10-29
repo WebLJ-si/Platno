@@ -373,6 +373,10 @@ For each existing library:
 
 This part is visible to the owner.
 
+### Updates
+
+**Updates** shows the installed version and **Check for updates**. When a newer release exists it shows the version, its notes and a link to the release page, and either **Install and restart** (programs you installed yourself) or the exact command to run (Docker, `.deb`, read-only folder). Installing downloads and verifies the release, then the page reloads when the server is back.
+
 ### Server
 
 - **Server name** and **Save server name**: the name displayed in the app.
