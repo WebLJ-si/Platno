@@ -19,5 +19,5 @@ class HelpRendererTests(unittest.TestCase):
     def test_unclosed_code_fence_is_an_error(self):
         with self.assertRaises(ValueError):renderer.render('```\nunclosed')
     def test_committed_page_matches_canonical_guide(self):
-        self.assertEqual((ROOT/'static/help.html').read_text(),renderer.render((ROOT/'docs/user-guide.sl.md').read_text()))
+        self.assertEqual((ROOT/'static/help.html').read_text(),renderer.render((ROOT/'docs/user-guide.md').read_text()))
 if __name__=='__main__':unittest.main()

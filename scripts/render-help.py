@@ -21,15 +21,15 @@ def render(markdown):
         elif in_code: code.append(line)
         elif not line.strip(): flush()
         elif match := re.match(r'^(#{1,3}) (.+)$',line):
-            flush(); level=len(match[1]);anchor=' id="remote-access"' if match[2]=='Oddaljeni dostop (Remote access)' else '';output.append(f'<h{level}{anchor}>{html.escape(match[2])}</h{level}>')
+            flush(); level=len(match[1]);anchor=' id="remote-access"' if match[2]=='Remote access' else '';output.append(f'<h{level}{anchor}>{html.escape(match[2])}</h{level}>')
         else: paragraph.append(line)
     flush()
     if in_code: raise ValueError('Unclosed Markdown code fence')
-    return '<!doctype html>\n<html lang="sl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Platno · Navodila</title><link rel="stylesheet" href="/assets/platno.css"><style>body{margin:0;background:#09090b;color:#eef2f7;font:17px/1.65 system-ui}body>main{max-width:900px;margin:auto;padding:40px 24px}a{color:#c6ff00}h1,h2,h3{line-height:1.15}h1{font-size:clamp(34px,5vw,56px)}h2{font-size:32px}h3{font-size:22px}h2{margin-top:2.5em;border-top:1px solid #364255;padding-top:1em}pre{padding:16px;background:#141418;border-radius:8px;overflow:auto}p{overflow-wrap:anywhere}:focus-visible{outline:3px solid #c6ff00}</style></head><body><main><a href="/">← Nazaj v knjižnico</a>\n'+'\n'.join(output)+'\n</main></body></html>\n'
+    return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Platno · User guide</title><link rel="stylesheet" href="/assets/platno.css"><style>body{margin:0;background:#09090b;color:#eef2f7;font:17px/1.65 system-ui}body>main{max-width:900px;margin:auto;padding:40px 24px}a{color:#c6ff00}h1,h2,h3{line-height:1.15}h1{font-size:clamp(34px,5vw,56px)}h2{font-size:32px}h3{font-size:22px}h2{margin-top:2.5em;border-top:1px solid #364255;padding-top:1em}pre{padding:16px;background:#141418;border-radius:8px;overflow:auto}p{overflow-wrap:anywhere}:focus-visible{outline:3px solid #c6ff00}</style></head><body><main><a href="/">← Back to the library</a>\n'+'\n'.join(output)+'\n</main></body></html>\n'
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--check',action='store_true');args=parser.parse_args()
-    result=render((ROOT/'docs/user-guide.sl.md').read_text())
+    result=render((ROOT/'docs/user-guide.md').read_text())
     target=ROOT/'static/help.html'
     if args.check:
         if not target.exists() or target.read_text()!=result: raise SystemExit('Help page drift: run python3 scripts/render-help.py')
