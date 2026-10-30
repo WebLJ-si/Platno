@@ -8,9 +8,10 @@ import http.cookiejar, http.server, json, os, pathlib, socket, subprocess, sys, 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BINARY = os.environ.get('PLEXV2_TEST_BINARY', str(ROOT / 'target/debug/smart-media-scanner'))
+VERSION = subprocess.check_output([BINARY, '--version'], text=True).strip().split()[-1]
 CREDENTIALS = {'email': 'owner@example.test', 'password': 'telemetry password 123', 'confirm_password': 'telemetry password 123'}
 GOOD = {'schema': 1, 'sessionId': '0123456789abcdef0123456789abcdef', 'kind': 'browser_error', 'code': 'read-null', 'scene': 'library',
-        'uptimeSeconds': 42, 'release': '0.1.0', 'frames': [{'asset': 'app', 'line': 7, 'column': 3}],
+        'uptimeSeconds': 42, 'release': VERSION, 'frames': [{'asset': 'app', 'line': 7, 'column': 3}],
         'context': {'runtime': 'browser', 'browser': 'Chrome'}, 'replay': [{'kind': 'click', 'scene': 'library', 'offsetMs': 5, 'target': 'button'}]}
 
 
@@ -104,7 +105,7 @@ def main():
         assert beta.call('POST', '/api/telemetry/report', GOOD)[0] == 202
         wait_for(lambda: any(p['kind'] == 'browser_error' for _, p in Collector.received), 'forwarded browser error')
         forwarded = next(p for _, p in Collector.received if p['kind'] == 'browser_error')
-        assert forwarded['code'] == 'read-null' and 'serverUptimeSeconds' in forwarded and forwarded['release'] == '0.1.0', forwarded
+        assert forwarded['code'] == 'read-null' and 'serverUptimeSeconds' in forwarded and forwarded['release'] == VERSION, forwarded
 
         before = len(Collector.received)
         for private in [{**GOOD, 'message': 'private movie title'}, {**GOOD, 'code': 'secret-token-value'},
