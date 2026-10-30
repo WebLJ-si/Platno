@@ -3,7 +3,7 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
-## [Unreleased]
+## [0.2.4]
 
 ### Diagnostics
 - While Platno is in beta the official Docker images (`latest`, version tags and `beta`) send anonymous technical error and layout reports to the project by default. The owner can switch this off in Settings or with `SMART_MEDIA_TELEMETRY=off`, each browser can switch off its own reporting, and Do Not Track is honoured.
