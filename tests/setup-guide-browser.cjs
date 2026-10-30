@@ -53,10 +53,23 @@ const PASSWORD = 'guide password 12345';
     await page.waitForFunction(()=>document.querySelector('#sg-body').getAnimations({subtree:true}).every(a=>a.playState==='finished'));
     await page.screenshot({path:'/tmp/plexv2-setup-mixed.png'});
 
+    // A slow initial folder response must not overwrite a path being typed.
+    let releaseInitial,initialDone;
+    const initialReady=new Promise(resolve=>initialDone=resolve);
+    await page.route('**/api/admin/browse-folders?path=',async route=>{
+      const response=await route.fetch();
+      await new Promise(resolve=>releaseInitial=resolve);
+      await route.fulfill({response});initialDone();
+    },{times:1});
     // The folder browser works in any browser and any system: pick the folder from a list instead of typing it.
     await page.locator('[data-act="choose-root"][data-n="0"]').click();
     const picker = page.locator('dialog.fb'); await picker.waitFor();
-    await page.locator('#fb-path').fill(media); await page.locator('#fb-path').press('Enter');
+    await page.locator('#fb-path').fill(media);
+    await page.waitForFunction(()=>document.querySelector('#fb-path').value.length>0);
+    while(!releaseInitial) await page.waitForTimeout(10);
+    releaseInitial();await initialReady;await page.waitForTimeout(100);
+    assert.equal(await page.locator('#fb-path').inputValue(),media,'late response preserves typed path');
+    await page.locator('#fb-path').press('Enter');
     await picker.locator('.fb-list button', { hasText: 'Movies' }).waitFor();
     assert.equal(await picker.locator('.fb-list button').count(), 1, 'only folders are listed, never files');
     await picker.locator('.fb-list button', { hasText: 'Movies' }).click();

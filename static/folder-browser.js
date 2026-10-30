@@ -42,10 +42,12 @@
     const finish = path => { chosen = path; dlg.close(); };
     dlg.addEventListener('click', e => { const b = e.target.closest('button[data-path]'); if (b) load(b.dataset.path); });
     $('fb-up').addEventListener('click', () => parent && load(parent));
+    // Typing supersedes an in-flight directory response; do not overwrite the draft path.
+    $('fb-path').addEventListener('input', () => { token++; $('fb-use').disabled = true; });
     $('fb-path').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); load($('fb-path').value.trim()); } });
     $('fb-cancel').addEventListener('click', () => dlg.close());
     $('fb-use').addEventListener('click', () => current && finish(current));
-    dlg.addEventListener('close', () => { dlg.remove(); resolve(chosen); });
+    dlg.addEventListener('close', () => { token++; dlg.remove(); resolve(chosen); });
     dlg.showModal();
     load(start);
   });
