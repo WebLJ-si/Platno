@@ -25,7 +25,7 @@ export function createHandler({env=process.env,storeFactory=()=>new Store(env),a
     const store=storeFactory();const ip=String(req.headers['x-vercel-forwarded-for']||req.socket?.remoteAddress||'unknown').split(',')[0].trim();
     if(!await store.rateLimit(ip))return respond(429,{error:'Reporting limit reached'});
     report.id=randomBytes(16).toString('hex');report.receivedAt=new Date().toISOString();
-    report.fingerprint=createHash('sha256').update(JSON.stringify([report.kind,report.code,report.scene,report.frames,report.route,report.status])).digest('hex').slice(0,20);
+    report.fingerprint=createHash('sha256').update(JSON.stringify([report.kind,report.code,report.scene,report.frames,report.route,report.status,report.kind==='ui_issue'?Math.round((report.context.width||0)/100):undefined])).digest('hex').slice(0,20);
     await store.save(report);return respond(202,{accepted:true});
    }
    if(!await auth.ownerSession(req,cfg))return respond(401,{error:'Owner sign-in required'});
