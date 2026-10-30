@@ -14,6 +14,8 @@ Required production environment variables:
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`: OAuth Web application credentials.
 - `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, or the Vercel integration aliases `KV_REST_API_URL`, `KV_REST_API_TOKEN`. Never expose these to the browser.
 
+**Access code (simple alternative to Google).** Set `DASHBOARD_CODE_HASH` to the output of `printf '%s' YOUR-CODE | node scripts/hash-code.mjs` (a salted scrypt hash; the code itself is never stored or committed). The dashboard then shows a code field. A code session can see reports and mark an issue group Open, Seen or Fixed, but cannot delete anything; deleting needs the Google owner account. Sign-in attempts are limited to 5 per source and 30 overall per 15 minutes. A short numeric code is weak against anyone who obtains the hash, so use a longer code once it matters; changing the hash signs out every code session.
+
 Create a Google Cloud OAuth client of type **Web application**. Set the authorized redirect URI to:
 
 ```

@@ -1,8 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import {generateKeyPair,SignJWT} from 'jose';
-import {createHandler} from '../api/index.js';import {parseReport} from '../lib/schema.mjs';import {settings,sign,verify,ownerSession,ownerAllowed,callback,login} from '../lib/auth.mjs';
+import {createHandler} from '../api/index.js';import {parseReport} from '../lib/schema.mjs';import {settings,sign,verify,ownerSession,ownerAllowed,callback,login,hashCode,verifyCode,codeLogin,viewerSession} from '../lib/auth.mjs';
 const env={APP_URL:'https://collector.example.test',SESSION_SECRET:'test-secret-at-least-thirty-two-bytes-long',OWNER_EMAIL:'owner@example.test',GOOGLE_CLIENT_ID:'test-google-client',GOOGLE_CLIENT_SECRET:'fake-test-secret'};
 const cfg=settings(env),base={schema:1,sessionId:'a'.repeat(32),kind:'browser_error',code:'read-null',scene:'library',uptimeSeconds:42,release:'0.1.0',context:{runtime:'browser',browser:'Chrome',width:390,height:844},frames:[{asset:'app',line:42,column:4}],replay:[{kind:'snapshot',offsetMs:12,scene:'library',width:390,height:844,boxes:[{x:0,y:0,w:100,h:20,kind:'button'}]}]};
-class MemoryStore{reports=new Map();allow=true;async rateLimit(){return this.allow}async save(report){this.reports.set(report.id,structuredClone(report))}async list(){return [...this.reports.values()]}async sessions(){return []}async get(id){return this.reports.get(id)}async delete(id){this.reports.delete(id)}async purge(){this.reports.clear()}}
+class MemoryStore{reports=new Map();allow=true;attempts=0;markMap=new Map();async loginAttempt(){this.attempts++;return this.attempts<=5}async marks(f){return f.map(x=>this.markMap.get(x)||null)}async mark(f,s){if(s==='open')this.markMap.delete(f);else this.markMap.set(f,s)}async rateLimit(){return this.allow}async save(report){this.reports.set(report.id,structuredClone(report))}async list(){return [...this.reports.values()]}async sessions(){return []}async get(id){return this.reports.get(id)}async delete(id){this.reports.delete(id)}async purge(){this.reports.clear()}}
 async function fixture(fn){const store=new MemoryStore(),server=http.createServer(createHandler({env,storeFactory:()=>store}));await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port;try{await fn(url,store)}finally{await new Promise(r=>server.close(r))}}
 const token=()=>sign({sub:'owner',ownerHash:'unused'},cfg,'dashboard',60);
 async function ownerToken(){const {createHash}=await import('node:crypto');return sign({sub:'owner',ownerHash:createHash('sha256').update(cfg.owner).digest('hex')},cfg,'dashboard',60)}
@@ -18,4 +18,39 @@ test('layout problems carry flagged boxes and a count but never text',()=>{
  for(const code of ['layout-overflow','layout-clipped','layout-offscreen','stall','slow','csp','http4xx','ffmpeg-fail','sync-fail','scan-error'])assert.equal(parseReport({...base,kind:code.startsWith('layout')?'ui_issue':'server_error',code}).code,code);
  assert.throws(()=>parseReport({...issue,replay:[{...issue.replay[0],boxes:[{x:1,y:1,w:1,h:1,kind:'text',flag:true,label:'Private movie title'}]}]}),'boxes accept no label or text');
  assert.throws(()=>parseReport({...issue,count:-1}));assert.throws(()=>parseReport({...issue,code:'made-up-code'}));
+});
+
+const codeEnv={...env,DASHBOARD_CODE_HASH:hashCode('2828')};
+async function codeFixture(fn,environment=codeEnv){const store=new MemoryStore(),server=http.createServer(createHandler({env:environment,storeFactory:()=>store}));await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port;try{await fn(url,store)}finally{await new Promise(r=>server.close(r))}}
+const post=(url,body,headers={})=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Origin:env.APP_URL,...headers},body:JSON.stringify(body)});
+test('access codes are stored as salted hashes and verified in constant time',()=>{
+ const stored=hashCode('2828');assert.match(stored,/^scrypt\$[\w-]+\$[\w-]+$/);assert(!stored.includes('2828'));assert.notEqual(stored,hashCode('2828'),'a fresh salt each time');
+ assert(verifyCode('2828',stored));for(const bad of ['2829','','28280',' 2828',undefined])assert(!verifyCode(bad,stored));assert(!verifyCode('2828','plain-text-code'));assert(!verifyCode('2828',''));
+});
+test('code sign-in gives a view-and-mark session that cannot delete, and wrong codes or throttling are refused',async()=>codeFixture(async(url,store)=>{
+ assert.deepEqual(await (await fetch(url+'/api/auth/methods')).json(),{google:true,code:true});
+ assert.equal((await fetch(url+'/api/reports')).status,401);
+ assert.equal((await post(url+'/api/auth/code',{code:'1234'})).status,401);
+ assert.equal((await post(url+'/api/auth/code',{code:'2828'},{Origin:'https://evil.example'})).status,403,'cross-origin sign-in is refused');
+ const ok=await post(url+'/api/auth/code',{code:'2828'});assert.equal(ok.status,200);const setCookie=ok.headers.get('set-cookie');assert(/platno_viewer=/.test(setCookie)&&/HttpOnly/.test(setCookie)&&/SameSite=Lax/.test(setCookie)&&/Secure/.test(setCookie));
+ const cookie=setCookie.split(';')[0],auth={Cookie:cookie};
+ const me=await (await fetch(url+'/api/auth/me',{headers:auth})).json();assert.equal(me.role,'viewer');assert.equal(me.owner,false);
+ await fetch(url+'/api/ingest',{method:'POST',body:JSON.stringify(base)});const [report]=await store.list();
+ const listed=await (await fetch(url+'/api/reports',{headers:auth})).json();assert.equal(listed.reports[0].status,'open');
+ assert.equal((await fetch(url+'/api/mark?id='+report.id+'&status=seen',{method:'POST',headers:{...auth,Origin:env.APP_URL}})).status,200);
+ assert.equal((await (await fetch(url+'/api/report?id='+report.id,{headers:auth})).json()).status,'seen');
+ assert.equal((await fetch(url+'/api/mark?id='+report.id+'&status=bogus',{method:'POST',headers:{...auth,Origin:env.APP_URL}})).status,400);
+ assert.equal((await fetch(url+'/api/mark?id='+report.id+'&status=fixed',{method:'POST',headers:auth})).status,403,'marking needs a same-origin request');
+ assert.equal((await fetch(url+'/api/delete?id='+report.id,{method:'POST',headers:{...auth,Origin:env.APP_URL}})).status,403,'a code session cannot delete');
+ assert.equal((await fetch(url+'/api/purge',{method:'POST',headers:{...auth,Origin:env.APP_URL}})).status,403,'a code session cannot purge');
+ assert.equal(store.reports.size,1);
+ store.attempts=5;assert.equal((await post(url+'/api/auth/code',{code:'2828'})).status,429,'too many attempts are refused even with the right code');
+}));
+test('code sign-in is off without a configured hash, and changing the code ends old sessions',async()=>{
+ await codeFixture(async url=>{assert.equal((await post(url+'/api/auth/code',{code:'2828'})).status,503);assert.equal((await (await fetch(url+'/api/auth/methods')).json()).code,false)},env);
+ const cfg=settings(codeEnv),cookie=(await codeLogin('2828',cfg)).split(';')[0];
+ assert(await viewerSession({headers:{cookie}},cfg));
+ assert(!await viewerSession({headers:{cookie}},settings({...env,DASHBOARD_CODE_HASH:hashCode('9999')})),'a new code invalidates earlier sessions');
+ assert(!await viewerSession({headers:{cookie}},settings(env)),'no hash configured, no session');
+ await assert.rejects(()=>codeLogin('2828',settings(env)));
 });

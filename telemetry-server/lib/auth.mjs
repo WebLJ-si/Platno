@@ -1,11 +1,11 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { SignJWT, jwtVerify, createRemoteJWKSet } from 'jose';
 const googleKeys=createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 export function settings(env=process.env){
  const origin=new URL(env.APP_URL||'http://127.0.0.1:8790');
  if(origin.pathname!=='/'||origin.search||origin.hash||origin.username||origin.password)throw Error('APP_URL must be an origin');
  if(env.VERCEL&&origin.protocol!=='https:')throw Error('HTTPS required');
- return {origin:origin.origin,secure:origin.protocol==='https:',clientId:env.GOOGLE_CLIENT_ID,clientSecret:env.GOOGLE_CLIENT_SECRET,owner:(env.OWNER_EMAIL||'').trim().toLowerCase(),secret:env.SESSION_SECRET};
+ return {origin:origin.origin,secure:origin.protocol==='https:',clientId:env.GOOGLE_CLIENT_ID,clientSecret:env.GOOGLE_CLIENT_SECRET,owner:(env.OWNER_EMAIL||'').trim().toLowerCase(),secret:env.SESSION_SECRET,codeHash:(env.DASHBOARD_CODE_HASH||'').trim()};
 }
 function key(config){if(!config.secret||config.secret.length<32)throw Error('Authentication not configured');return new TextEncoder().encode(config.secret)}
 export function cookies(req){const result=Object.create(null);for(const part of (req.headers.cookie||'').split(';')){const at=part.indexOf('=');if(at>0)result[part.slice(0,at).trim()]=part.slice(at+1).trim()}return result}
@@ -35,4 +35,11 @@ export async function callback(req,params,config,{fetcher=fetch,keys=googleKeys}
  if(payload.nonce!==pending.nonce||!ownerAllowed(payload,config)||(payload.azp&&payload.azp!==config.clientId))throw Error('Account not allowed');
  return cookie(config,'platno_owner',await sign({sub:'owner',ownerHash:ownerHash(config)},config,'dashboard',28800),28800);
 }
+// Simple access code: only a salted scrypt hash is configured (DASHBOARD_CODE_HASH); the code itself is never stored.
+export function hashCode(code){const salt=randomBytes(16);return 'scrypt$'+salt.toString('base64url')+'$'+scryptSync(String(code),salt,32,{N:16384,r:8,p:1}).toString('base64url')}
+export function verifyCode(code,stored){try{const [kind,salt,hash]=String(stored||'').split('$');if(kind!=='scrypt'||!salt||!hash)return false;const expected=Buffer.from(hash,'base64url'),got=scryptSync(String(code),Buffer.from(salt,'base64url'),expected.length,{N:16384,r:8,p:1});return got.length===expected.length&&timingSafeEqual(got,expected)}catch{return false}}
+export function codeConfigured(config){return /^scrypt\$[\w-]+\$[\w-]+$/.test(config.codeHash||'')}
+const codeStamp=config=>createHash('sha256').update(config.codeHash||'').digest('hex').slice(0,24);
+export async function codeLogin(code,config){if(!codeConfigured(config)||typeof code!=='string'||code.length<1||code.length>64||!verifyCode(code,config.codeHash))throw Error('Wrong code');return cookie(config,'platno_viewer',await sign({sub:'viewer',stamp:codeStamp(config)},config,'viewer',28800),28800)}
+export async function viewerSession(req,config){try{const payload=await verify(cookies(req).platno_viewer,config,'viewer');return codeConfigured(config)&&payload.sub==='viewer'&&payload.stamp===codeStamp(config)}catch{return false}}
 export function sameOrigin(req,config){return req.headers.origin===config.origin&&req.headers['sec-fetch-site']!=='cross-site'}
