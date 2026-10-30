@@ -31,6 +31,17 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),{chromium}=requ
   await page.setViewportSize({width:1100,height:900});await page.locator('#quality').click();
   await page.screenshot({path:'/tmp/platno-select-styles.png'});
   await page.keyboard.press('Escape');
+  const outline=locator=>locator.evaluate(el=>{const s=getComputedStyle(el);return {style:s.outlineStyle,width:s.outlineWidth,color:s.outlineColor}});
+  await page.locator('#action').click();await page.mouse.move(0,0);
+  assert.equal((await outline(page.locator('#action'))).style,'none','pointer clicks do not leave a keyboard outline');
+  await page.keyboard.press('Shift+Tab');await page.keyboard.press('Tab');
+  assert.equal(await page.locator('#action').evaluate(el=>el===document.activeElement),true);
+  assert.deepEqual(await outline(page.locator('#action')),{style:'solid',width:'2px',color:'rgb(146, 146, 160)'},'Tab focus remains clear and neutral');
+  await page.locator('#app').focus();assert.equal((await outline(page.locator('#app'))).style,'none','content wrapper is not highlighted');
+  await page.locator('h2').focus();assert.equal((await outline(page.locator('h2'))).style,'none','programmatically focused heading is not highlighted');
+  await page.locator('.settings-tabs a').click();await page.mouse.move(0,0);
+  assert.equal(await page.locator('.settings-tabs a').evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)','focused tab does not turn into a selected pill');
+  assert.equal(await page.locator('h2').evaluate(el=>getComputedStyle(el,'::selection').backgroundColor),'rgb(59, 68, 85)','text selection uses a muted color');
   console.log('PASS: shared select styling, keyboard selection, disabled options and responsive pickers across settings, setup, filters, details and player');
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});
