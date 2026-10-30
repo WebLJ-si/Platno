@@ -3,7 +3,7 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
-## [Unreleased]
+## [0.2.1]
 
 ### Player
 - Picture-in-Picture and Fullscreen are icon buttons beside the settings gear instead of text buttons inside the panel.
