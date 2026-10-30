@@ -3,6 +3,11 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
+## [Unreleased]
+
+### Diagnostics
+- The banner at the top of every page is gone. The server owner is told once after signing in, in a small dialog, and decides for the whole server: keep diagnostics on or turn them off. The answer is remembered, other accounts are never asked, and the controls stay in Settings under Beta diagnostics.
+
 ## [0.2.4]
 
 ### Diagnostics

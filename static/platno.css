@@ -55,7 +55,6 @@ dialog.player-dialog{max-width:1600px;width:96vw;border-radius:20px;padding:0;ba
 /* Remote setup diagnostics and long hostnames must fit narrow settings panels. */
 .remote-access-panel{min-width:0;overflow-wrap:anywhere}.remote-access-panel code{white-space:normal;overflow-wrap:anywhere}.remote-access-panel .toolbar{min-width:0}.remote-access-panel button{max-width:100%;white-space:normal}
 @media(max-width:360px){.settings-tabs{margin-inline:-16px;padding-inline:16px}}
-.beta-diagnostics-notice{display:flex;align-items:center;gap:14px;justify-content:space-between;padding:14px 18px;margin:16px 0;border:1px solid #586b28;border-radius:10px;background:#1c2414;color:#d8e6ba;font-size:12px;line-height:1.6}.beta-diagnostics-notice button{flex-shrink:0;font-size:11px}.telemetry-panel{overflow-wrap:anywhere}.telemetry-panel>label{display:block;margin:14px 0}@media(max-width:760px){.beta-diagnostics-notice{flex-direction:column;align-items:stretch}}
 .panel code{overflow-wrap:anywhere}
 /* First-run guide. Motion: transform/opacity only; strong ease-out; reduced motion keeps gentle fades. */
 .sg{margin:0;padding:0;border:0;border-radius:0;box-shadow:none;max-width:none;max-height:none;width:100%;height:100%;color:inherit;--sg-out:cubic-bezier(.23,1,.32,1);--sg-io:cubic-bezier(.77,0,.175,1);position:fixed;inset:0;z-index:300;display:grid;grid-template-columns:292px minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden;background:var(--bg);opacity:0;transition:opacity .24s var(--sg-out)}
@@ -380,3 +379,8 @@ select:not([multiple]):not([size]) > button:focus{outline:none}
 /* Continue-watching cards: the play button sits bottom right so it never covers the title of a card without artwork. */
 .resume-art .resume-play{left:auto;right:12px;bottom:12px}
 .resume-art .poster-fallback{padding-right:68px}
+
+/* One-time diagnostics notice for the server owner. */
+.diagnostics-dialog{width:min(520px,92vw);padding:26px;border:1px solid var(--border,#2c3544);border-radius:16px;background:#111115;color:#f4f4f5}
+.diagnostics-dialog::backdrop{background:#000b}
+.diagnostics-dialog h2{margin:0 0 12px}.diagnostics-dialog p{margin:0 0 12px;line-height:1.55}.diagnostics-dialog .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}

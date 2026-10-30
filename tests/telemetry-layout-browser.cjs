@@ -47,6 +47,11 @@ const PASSWORD = 'layout password 12345', SECRET_TEXT = 'Private movie title tha
     assert((await problems()).some(p => p.startsWith('layout-overlap')), 'play button over the title is detected');
     await page.evaluate(() => window.scrollTo(0, 0));
 
+    // A fixed bar over a button that scrolls beneath it (the phone navigation) is normal, not a problem.
+    await page.evaluate(() => { const a = document.createElement('button'); a.id = 'test-under'; a.textContent = 'Under the bar'; a.style.cssText = 'position:relative;display:block;margin:12px 0'; document.querySelector('main').prepend(a); window.scrollTo(0, 0); const r = a.getBoundingClientRect(), b = document.createElement('button'); b.id = 'test-bar'; b.textContent = 'Fixed bar'; b.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;z-index:9`; document.body.append(b); });
+    assert.deepEqual(await problems(), [], 'a fixed bar over scrolling content is not reported');
+    await page.evaluate(() => document.querySelectorAll('#test-under,#test-bar').forEach(n => n.remove()));
+
     // 3. Page overflow, clipped button text, overlapping buttons, all with private text that must not leak.
     await page.evaluate(secret => {
       const main = document.querySelector('main');

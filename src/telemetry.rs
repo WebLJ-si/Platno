@@ -25,6 +25,8 @@ struct Telemetry {
     session: String,
     sender: mpsc::Sender<(u64, Value)>,
     allowed: AtomicBool,
+    // The owner has not yet been told once that diagnostics are on; cleared when they answer.
+    notice_pending: AtomicBool,
     generation: AtomicU64,
     limits: Mutex<std::collections::HashMap<i64, (Instant, u8)>>,
 }
@@ -158,15 +160,26 @@ pub async fn observe(req: Request<Body>, next: Next) -> Response {
 pub async fn config() -> Json<Value> {
     if let Some(t) = TELEMETRY.get() {
         Json(
-            json!({"available":t.beta&&t.endpoint.is_some(),"enabled":enabled(t),"destination":t.endpoint.as_ref().and_then(|u|u.host_str()),"serverUptimeSeconds":uptime(t),"release":env!("CARGO_PKG_VERSION"),"channel":if t.beta{"beta"}else{"stable"}}),
+            json!({"available":t.beta&&t.endpoint.is_some(),"enabled":enabled(t),"destination":t.endpoint.as_ref().and_then(|u|u.host_str()),"serverUptimeSeconds":uptime(t),"release":env!("CARGO_PKG_VERSION"),"channel":if t.beta{"beta"}else{"stable"},"noticePending":t.beta&&t.endpoint.is_some()&&t.notice_pending.load(Ordering::Acquire)}),
         )
     } else {
         Json(json!({"available":false,"enabled":false,"channel":"stable"}))
     }
 }
 pub async fn owner_setting(State(app): State<App>, Json(value): Json<Value>) -> Response {
-    let Some(active) = value.get("enabled").and_then(Value::as_bool) else {
+    let active = value.get("enabled").and_then(Value::as_bool);
+    let seen = value.get("noticeSeen").and_then(Value::as_bool).unwrap_or(false);
+    if active.is_none() && !seen {
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    if seen {
+        if db(&app).execute("INSERT INTO server_settings(key,value) VALUES('beta_telemetry_notice','seen') ON CONFLICT(key) DO UPDATE SET value=excluded.value",[]).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response();}
+        if let Some(t) = TELEMETRY.get() {
+            t.notice_pending.store(false, Ordering::Release);
+        }
+    }
+    let Some(active) = active else {
+        return config().await.into_response();
     };
     if db(&app).execute("INSERT INTO server_settings(key,value) VALUES('beta_telemetry',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[if active{"true"}else{"false"}]).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response()}
     if let Some(t) = TELEMETRY.get() {
@@ -402,6 +415,14 @@ pub fn init(app: App) {
         == "beta"
         && std::env::var("SMART_MEDIA_TELEMETRY").ok().as_deref() != Some("off");
     let (sender, mut receiver) = mpsc::channel::<(u64, Value)>(32);
+    let notice_pending = db(&app)
+        .query_row(
+            "SELECT value FROM server_settings WHERE key='beta_telemetry_notice'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .map(|s| s != "seen")
+        .unwrap_or(true);
     let allowed = db(&app)
         .query_row(
             "SELECT value FROM server_settings WHERE key='beta_telemetry'",
@@ -417,6 +438,7 @@ pub fn init(app: App) {
         session: random_id(),
         sender,
         allowed: AtomicBool::new(allowed),
+        notice_pending: AtomicBool::new(notice_pending),
         generation: AtomicU64::new(0),
         limits: Mutex::new(std::collections::HashMap::new()),
     });
