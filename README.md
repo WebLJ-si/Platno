@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/WebLJ-si/Platno/actions/workflows/ci.yml/badge.svg)](https://github.com/WebLJ-si/Platno/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/WebLJ-si/Platno)](https://github.com/WebLJ-si/Platno/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ![The Platno library](docs/images/library.png)
 
@@ -145,4 +146,4 @@ Series metadata comes from [TVmaze](https://www.tvmaze.com/api) (CC BY-SA 4.0), 
 
 *This product uses the TMDB API but is not endorsed or certified by TMDB.* Platno is an independent project and is not affiliated with Plex, Jellyfin, TVmaze, TMDB, Wikidata or OpenSubtitles. Video conversion uses [FFmpeg](https://ffmpeg.org), which has its own licence. Each person uses their own provider keys; Platno never collects them.
 
-Platno is backed by [WebLJ.si](https://weblj.si). A licence for Platno itself has not been chosen yet. Until one is added to the repository, the usual copyright rules apply to the code.
+Platno is backed by [WebLJ.si](https://weblj.si). Platno is released under the [MIT License](LICENSE): free to use, change, share and sell, as long as the copyright notice stays. It bundles HLS.js (its own license is in `static/vendor/`) and the Archivo and JetBrains Mono fonts (SIL Open Font License). The Docker image also contains FFmpeg, whisper.cpp (MIT) and the whisper base model (MIT), each under its own license.

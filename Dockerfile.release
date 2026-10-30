@@ -26,6 +26,7 @@ RUN curl -fsSL -o /ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/re
 FROM debian:bookworm-slim
 ARG TARGETARCH
 LABEL org.opencontainers.image.title="Platno" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.description="Local media library with a web player" \
       org.opencontainers.image.source="https://github.com/WebLJ-si/Platno"
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl && rm -rf /var/lib/apt/lists/* && useradd --uid 10001 --create-home media && mkdir /data && chown media:media /data

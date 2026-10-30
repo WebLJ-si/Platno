@@ -2,6 +2,7 @@
 name = "smart-media-scanner"
 version = "0.2.1"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 axum = "0.8"
