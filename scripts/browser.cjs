@@ -1,4 +1,5 @@
 const assert=require('node:assert/strict');
+const version=require('node:fs').readFileSync('Cargo.toml','utf8').match(/^version = "([^"]+)"/m)[1];
 // Without this, Playwright's setOffline() does not affect service-worker fetches in current Chrome.
 process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS??='1';
 const playwright=require('playwright');
@@ -92,7 +93,7 @@ const playwright=require('playwright');
   await remotePanel.getByRole('button',{name:'Disable remote access',exact:true}).click();
   await page.locator('#remote-access-status').filter({hasText:'Remote access disabled.'}).waitFor();
   assert.equal(await remotePanel.getByRole('button',{name:'Enable remote access',exact:true}).isDisabled(),!remoteReady);
-  const updatePanel=page.locator('#update-body');await updatePanel.getByText('Installed:').waitFor();assert((await updatePanel.innerText()).includes('Platno 0.1.0'));assert(await updatePanel.getByRole('button',{name:'Check for updates',exact:true}).isVisible());
+  const updatePanel=page.locator('#update-body');await updatePanel.getByText('Installed:').waitFor();assert((await updatePanel.innerText()).includes('Platno '+version));assert(await updatePanel.getByRole('button',{name:'Check for updates',exact:true}).isVisible());
   await remotePanel.getByRole('button',{name:'Refresh status',exact:true}).click();
   await page.locator('#remote-access-status').filter({hasText:'Status refreshed.'}).waitFor();
   assert.equal(await remotePanel.locator('a').getAttribute('href'),'/help#remote-access');

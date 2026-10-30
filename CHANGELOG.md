@@ -3,7 +3,21 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
-## [Unreleased]
+## [0.2.0]
+
+### Player and interface
+- Simplified playback controls: timeline, back 10 seconds, play/pause and forward 10 seconds; episode navigation and grouped settings sit at the top.
+- Subtitles, synchronization, audio, quality, speed, fullscreen and advanced options are organized in the player settings panel.
+- Consistent dark dropdowns throughout setup, settings, filters and playback, with readable long labels and native keyboard behavior.
+- Neutral keyboard focus and text selection, without selected-looking highlights on headings, content blocks or settings links.
+
+### Libraries and setup
+- New installations start without three predefined libraries. Choose one shared folder in setup for a mixed library containing movies, series and other videos.
+- Add, name and organize your own libraries by folder. Explicit scan targets and the most specific folder rules preserve the intended organization.
+- Any library can be removed, including the last one, while keeping media and watch history. Existing configured or populated libraries are preserved on upgrade.
+- Camera clips and unmatched videos without episode evidence no longer become fabricated local series.
+- Folder paths typed during loading are preserved when an earlier directory request finishes late.
+
 
 ### Fixes
 - Fullscreen works: the player area goes fullscreen instead of the dialog, which browsers refuse.

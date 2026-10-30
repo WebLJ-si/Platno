@@ -14,6 +14,7 @@ ARCH = {'x86_64': 'x86_64', 'amd64': 'x86_64', 'arm64': 'aarch64', 'aarch64': 'a
 SUFFIX = {'linux': f'linux-{ARCH}', 'macos': 'macos-universal', 'windows': 'windows-x86_64'}[OS]
 ASSET = f'platno-9.9.9-{SUFFIX}'
 PROGRAM = BINARY.read_bytes()
+CURRENT_VERSION = subprocess.check_output([str(BINARY), '--version'], text=True).strip().split()[-1]
 
 
 def free_port():
@@ -115,7 +116,7 @@ def main():
             servers.append(server)
             status, info = server.call('GET', '/api/owner/update')
             assert status == 200 and info['method'] == 'selfupdate' and info['enabled'] and not info['update_available'] and not info['can_install'], info
-            assert info['current'] == '0.1.0' and info['platform_supported'], info
+            assert info['current'] == CURRENT_VERSION and info['platform_supported'], info
             assert server.call('POST', '/api/owner/update/apply', {'version': '9.9.9'})[0] == 400, 'installing requires a check first'
             # Only the owner may look at or change updates.
             server.call('POST', '/api/admin/accounts', {'email': 'admin@example.test', 'password': PASSWORD, 'confirm_password': PASSWORD, 'role': 'admin'})
