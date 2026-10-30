@@ -46,6 +46,8 @@ const PASSWORD = 'seek password 12345';
       assert(await page.locator('#player-settings').isVisible());
       assert.equal(await page.locator('.player-action-row button').count(), 3);
       assert(await page.locator('#player-settings #player-quality').isVisible());
+      await page.locator('#player-quality').click();await page.keyboard.press('Escape');
+      assert(await page.locator('#player-settings').isVisible(),'Escape closes the picker before settings');
       await page.keyboard.press('Escape');
       assert(await page.locator('#player-settings').isHidden());
       assert(await page.locator('#dialog').isVisible(), 'Escape dismisses settings before the player');

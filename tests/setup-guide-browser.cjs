@@ -48,6 +48,8 @@ const PASSWORD = 'guide password 12345';
     await primary(); await title('Where is your media');
     assert.equal(await page.locator('[data-lib-kind]').count(),1);
     assert.equal(await page.locator('#sg-kind-0').inputValue(),'mixed');
+    await page.locator('#sg-kind-0').click();await page.keyboard.press('Escape');
+    assert(await page.locator('#sg-sheet').isHidden(),'Escape closes the picker before the guide');
     await page.waitForFunction(()=>document.querySelector('#sg-body').getAnimations({subtree:true}).every(a=>a.playState==='finished'));
     await page.screenshot({path:'/tmp/plexv2-setup-mixed.png'});
 

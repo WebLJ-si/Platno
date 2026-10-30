@@ -82,10 +82,11 @@
   /* ---------- shell ---------- */
   function trap(e) {
     if (!root) return;
+    if (e.key === 'Escape' && root.querySelector('select:open')) return;
     if (e.key === 'Escape') { e.preventDefault(); if (root.classList.contains('sg-modal')) closeHelp('close'); else toggleExit(true); return; }
     if (e.key === 'Enter' && e.target.dataset && e.target.dataset.enter) { e.preventDefault(); ACT[e.target.dataset.enter]?.(e.target); return; }
     if (e.key !== 'Tab') return;
-    const items = [...root.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')].filter(el => !el.disabled && el.offsetParent !== null && !el.closest('[inert]'));
+    const items = [...root.querySelectorAll('button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])')].filter(el => el.tabIndex >= 0 && !el.disabled && el.offsetParent !== null && !el.closest('[inert]'));
     if (!items.length) return;
     const first = items[0], last = items[items.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
