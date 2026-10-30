@@ -493,6 +493,7 @@ async fn recognise_clip(cli: &Path, model: &Path, path: &Path, audio: &str, temp
         .await
         .map_err(|_| "Audio sample extraction timed out")?;
     if !output.status.success() {
+        crate::telemetry::event("server_error", "sync-fail", Some("subtitles"));
         return Err("This audio track cannot be decoded for speech alignment".into());
     }
     let mut detect = Command::new(playback::binary("ffmpeg"));
@@ -516,6 +517,7 @@ async fn recognise_clip(cli: &Path, model: &Path, path: &Path, audio: &str, temp
         .await
         .map_err(|_| "Local speech recognition timed out or could not start")?;
     if !output.status.success() {
+        crate::telemetry::event("server_error", "sync-fail", Some("subtitles"));
         return Err("Local speech recognition failed; check the whisper-cli/model installation".into());
     }
     let data = tokio::fs::read(out.with_extension("json"))

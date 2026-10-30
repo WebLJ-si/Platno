@@ -10,6 +10,8 @@ Source builds and stable builds send nothing by default. Diagnostic beta builds 
 - App/server process uptime; approximate browser family/version, OS family, CPU thread count, viewport, online state and browser playback capabilities.
 - Player technical state, quality/mode, minute-bucket position/duration, and media error code.
 - Up to 100 recent interface events and at most two wireframe snapshots: rectangles representing generic buttons, inputs, panels and media placeholders. No original text, attributes, HTML, pictures or actual screen pixels are recorded.
+- Layout problems found by the interface itself: the category (page wider than the screen, controls overlapping each other or a title, button text cut off, a control outside the screen), how many elements are involved, and a wireframe of the screen with the involved boxes marked. Only rectangles are sent, never their text, names or pictures.
+- Technical failure categories from the server: FFmpeg stopped unexpectedly, a scan error, speech-sync tool failure, plus the existing HTTP 5xx and panic notices. Each is reported at most five times per ten minutes.
 - Heartbeats about every five minutes while reporting is active. A missing heartbeat is not proof of downtime: the app might be closed, disconnected, backgrounded, or opted out.
 
 ## What is excluded
@@ -26,7 +28,7 @@ The owner-only Google dashboard stores reports privately for up to seven days, w
 
 ## Scope and limits
 
-The reporter captures browser exceptions/rejections, console error categories, API server failures, playback failures, and best-effort Rust panic notifications. It does not guarantee capture of all crashes: power loss, OS termination, aborts/OOM, offline failures, and failures before initialization may be unavailable. It never delays playback for a network upload; queues and upload rates are bounded and failures are dropped without an offline backlog. Uptime means observed process/session uptime, not independent probing of private media servers.
+The reporter captures browser exceptions/rejections, console error categories, failed same-origin scripts, styles and pictures, policy violations, API server failures (5xx, slow requests over 20 seconds, 403/404/408/413/429), playback failures and stalls longer than ten seconds, layout problems, and best-effort Rust panic notifications. It does not guarantee capture of all crashes: power loss, OS termination, aborts/OOM, offline failures, and failures before initialization may be unavailable. It never delays playback for a network upload; queues and upload rates are bounded and failures are dropped without an offline backlog. Uptime means observed process/session uptime, not independent probing of private media servers.
 
 ## Building a diagnostic beta
 

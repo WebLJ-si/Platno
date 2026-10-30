@@ -64,3 +64,28 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.names.outputs.list }}
+      - name: Work out the diagnostic beta names
+        id: beta
+        if: ${{ contains(inputs.tags, 'latest') }}
+        env:
+          TAGS: ${{ inputs.tags }}
+          OWNER: ${{ github.repository_owner }}
+          HUB: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          version=${TAGS%% *}
+          list="ghcr.io/$owner/platno:beta,ghcr.io/$owner/platno:$version-beta"
+          [ -n "$HUB" ] && list="$list,$HUB/platno:beta,$HUB/platno:$version-beta"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+      # Opt-in image for testers: the same program with diagnostics switched on (BETA.md explains what is sent).
+      - uses: docker/build-push-action@v6
+        if: ${{ contains(inputs.tags, 'latest') }}
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            RELEASE_CHANNEL=beta
+            TELEMETRY_ENDPOINT=https://platno-observatory.vercel.app/api/ingest
+          tags: ${{ steps.beta.outputs.list }}

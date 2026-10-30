@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--report',default='/tmp/plexv2-test-report.json')
     args=parser.parse_args()
     commands=[['cargo','test','--locked'],['cargo','clippy','--all-targets','--locked','--','-D','warnings'],['node','scripts/check-js.cjs'],['node','--check','static/sw.js'],[sys.executable,'scripts/render-help.py','--check'],[sys.executable,'tests/help-renderer.py'],['node','tests/local-grouping.cjs'],['node','tests/movie-collections.cjs'],['node','tests/playback-strategies.cjs'],['node','tests/new-features.cjs'],['node','--test','tests/player-controls.cjs'],['cargo','build','--release','--locked'],[sys.executable,'tests/media-compatibility.py']+(['--speech'] if args.speech else [])+(['--browser'] if args.speech and args.browser else []),[sys.executable,'tests/remote-access.py'],[sys.executable,'tests/api-fuzz.py'],[sys.executable,'tests/self-update.py'],[sys.executable,'tests/telemetry-forwarding.py'],[sys.executable,'scripts/integration.py']+(['--browser'] if args.browser else [])]
-    if args.browser:commands.extend([['node','tests/form-styles-browser.cjs'],['node','tests/setup-guide-browser.cjs'],['node','tests/title-editor-browser.cjs'],['node','tests/player-seek-browser.cjs']])
+    if args.browser:commands.extend([['node','tests/form-styles-browser.cjs'],['node','tests/setup-guide-browser.cjs'],['node','tests/title-editor-browser.cjs'],['node','tests/player-seek-browser.cjs'],['node','tests/telemetry-layout-browser.cjs']])
     env={**os.environ,'PLEXV2_TEST_BINARY':str(ROOT/'target'/'release'/('smart-media-scanner.exe' if os.name=='nt' else 'smart-media-scanner'))}
     results=[]
     try:

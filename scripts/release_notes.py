@@ -87,6 +87,10 @@ Start with `docker compose up -d`, then open http://127.0.0.1:8787. Update later
 `docker compose exec -it platno platno reset-owner-password`. There is no hardware video encoding
 inside the container unless you pass a GPU device through; software conversion always works.
 
+### Diagnostic beta image
+
+`{ghcr}:beta` (and `{ghcr}:{version}-beta`) is the same program with automatic error and layout reporting switched on for testers. It sends anonymous technical reports to the project's collector; read [BETA.md](https://github.com/{repo}/blob/v{version}/BETA.md) first. The normal image above sends nothing.
+
 ## Synology
 
 Use Container Manager with the compose file above; see [docs/synology.md](https://github.com/{repo}/blob/v{version}/docs/synology.md) for folder permissions, the reverse proxy and what is not supported.

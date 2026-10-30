@@ -85,6 +85,32 @@ fn server_report(
     }
     value
 }
+// The same server event is reported at most this often, so a failing scan or stream cannot flood the collector.
+const EVENT_REPEATS: u32 = 5;
+const EVENT_WINDOW: Duration = Duration::from_secs(600);
+static EVENT_COUNTS: std::sync::Mutex<Vec<(String, Instant, u32)>> = std::sync::Mutex::new(Vec::new());
+fn repeat_allowed(key: String) -> bool {
+    let Ok(mut seen) = EVENT_COUNTS.lock() else { return false };
+    seen.retain(|(_, at, _)| at.elapsed() < EVENT_WINDOW);
+    match seen.iter().position(|(k, _, _)| *k == key) {
+        Some(i) if seen[i].2 >= EVENT_REPEATS => false,
+        Some(i) => {
+            seen[i].2 += 1;
+            true
+        }
+        None if seen.len() < 64 => {
+            seen.push((key, Instant::now(), 1));
+            true
+        }
+        None => false,
+    }
+}
+/// Reports a technical server event (kind and code are fixed categories, never text) when diagnostics are on.
+pub fn event(kind: &str, code: &str, route: Option<&str>) {
+    if TELEMETRY.get().is_some_and(|t| enabled(t)) && repeat_allowed(format!("{kind}|{code}|{}", route.unwrap_or(""))) {
+        enqueue(kind, code, route, None);
+    }
+}
 fn enqueue(kind: &str, code: &str, route: Option<&str>, status: Option<u16>) {
     if let Some(t) = TELEMETRY.get() {
         if enabled(t) {
@@ -166,6 +192,7 @@ fn safe_report(v: &Value, depth: usize) -> bool {
                     "rejection",
                     "http_error",
                     "playback_error",
+                    "ui_issue",
                     "server_error",
                     "panic",
                     "heartbeat",
@@ -182,6 +209,17 @@ fn safe_report(v: &Value, depth: usize) -> bool {
                     "media-decode",
                     "media-network",
                     "hls-fatal",
+                    "layout-overflow",
+                    "layout-overlap",
+                    "layout-clipped",
+                    "layout-offscreen",
+                    "stall",
+                    "slow",
+                    "csp",
+                    "http4xx",
+                    "ffmpeg-fail",
+                    "sync-fail",
+                    "scan-error",
                     "Error",
                     "TypeError",
                     "ReferenceError",
@@ -233,6 +271,7 @@ fn safe_report(v: &Value, depth: usize) -> bool {
                     "panel",
                     "media",
                     "link",
+                    "text",
                 ]
                 .contains(&s.as_str())
         }
@@ -295,6 +334,8 @@ fn safe_report(v: &Value, depth: usize) -> bool {
                         "w",
                         "h",
                         "boxes",
+                        "flag",
+                        "count",
                     ]
                     .contains(&k.as_str())
                         && safe_report(v, depth + 1)
@@ -434,6 +475,27 @@ pub fn init(app: App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn layout_reports_pass_the_allowlist_and_text_does_not() {
+        let issue = json!({"schema":1,"sessionId":"0123456789abcdef0123456789abcdef","kind":"ui_issue","code":"layout-overlap","scene":"library","uptimeSeconds":9,"count":3,"context":{"runtime":"browser","width":390},"frames":[],"replay":[{"kind":"snapshot","offsetMs":4,"scene":"library","width":390,"height":844,"boxes":[{"x":1,"y":2,"w":30,"h":40,"kind":"text","flag":true}]}],"release":env!("CARGO_PKG_VERSION")});
+        assert!(safe_report(&issue, 0));
+        let mut leaked = issue.clone();
+        leaked["replay"][0]["boxes"][0]["label"] = json!("Private movie title");
+        assert!(!safe_report(&leaked, 0), "boxes accept no label");
+        let mut message = issue.clone();
+        message["message"] = json!("Cannot read properties of null");
+        assert!(!safe_report(&message, 0));
+        for code in ["layout-overflow", "layout-clipped", "layout-offscreen", "stall", "slow", "csp", "http4xx", "ffmpeg-fail", "sync-fail", "scan-error"] {
+            assert!(safe_report(&json!({"code": code}), 0), "{code}");
+        }
+    }
+    #[test]
+    fn server_events_are_capped_per_kind_code_and_route() {
+        let key = || "server_error|scan-error|unit-test".to_string();
+        let allowed = (0..EVENT_REPEATS + 3).filter(|_| repeat_allowed(key())).count();
+        assert_eq!(allowed as u32, EVENT_REPEATS);
+        assert!(repeat_allowed("server_error|other-code|unit-test".into()), "another event is unaffected");
+    }
     #[test]
     fn endpoints_require_https_and_fixed_ingest_path() {
         for s in [

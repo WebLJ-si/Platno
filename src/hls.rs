@@ -224,6 +224,7 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(_) => {
+            crate::telemetry::event("playback_error", "ffmpeg-fail", Some("playback"));
             let _ = tokio::fs::remove_dir_all(&dir).await;
             return error(StatusCode::SERVICE_UNAVAILABLE, "FFmpeg is unavailable");
         }
@@ -243,7 +244,7 @@ pub async fn start(State(app): State<App>, axum::Extension(actor): axum::Extensi
         let pacing=async { match pid { Some(pid) if paced => pace(pid, dir.clone(), requested_by_player).await, _ => std::future::pending().await } };
         tokio::select! {
             _=pacing=>{},
-            result=child.wait()=>{worker_status.store(if result.is_ok_and(|s|s.success()){1}else{2},Ordering::Release); let _=rx.await;},
+            result=child.wait()=>{let ok=result.is_ok_and(|s|s.success());if !ok{crate::telemetry::event("playback_error","ffmpeg-fail",Some("playback"));}worker_status.store(if ok{1}else{2},Ordering::Release); let _=rx.await;},
             _=&mut rx=>{let _=child.kill().await;worker_status.store(2,Ordering::Release);}
         }
         let _=child.wait().await;

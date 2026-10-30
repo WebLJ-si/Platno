@@ -74,6 +74,7 @@ impl Job {
     fn error(&mut self, message: String) {
         if self.errors.len()>=100 {self.errors.remove(0);}
         self.errors.push(message.clone());
+        telemetry::event("server_error", "scan-error", Some("scan"));
         self.log(message);
     }
     fn log(&mut self, message: impl Into<String>) {
