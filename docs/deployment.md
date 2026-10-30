@@ -62,6 +62,17 @@ WantedBy=multi-user.target
 
 Create the service user and writable data directory first. Set `SMART_MEDIA_COOKIE_SECURE=0` for a local HTTP-only setup. macOS can use launchd with the same absolute binary and explicit environment; Windows can run the binary in a terminal or an independently configured service wrapper. No service is installed automatically.
 
+## Sending errors to a collector (optional)
+
+Platno sends nothing by default. To see technical errors and a heartbeat from your own server in the Platno Observatory (the Vercel collector in `telemetry-server/`, with a private Google-protected dashboard), start the server with both settings, for example in `compose.yaml` or the systemd environment:
+
+```
+SMART_MEDIA_RELEASE_CHANNEL=beta
+SMART_MEDIA_TELEMETRY_ENDPOINT=https://platno-observatory.vercel.app/api/ingest
+```
+
+The endpoint must be HTTPS (or `http://127.0.0.1` for a test collector). The start-up log then prints `BETA DIAGNOSTICS ENABLED`. `SMART_MEDIA_TELEMETRY=off` switches it off again, and each person can also turn reporting off in Settings, Beta diagnostics. What is sent and what never is: see [BETA.md](../BETA.md). To run your own collector instead, deploy `telemetry-server/` as a Vercel project (its README lists the required environment variables) and use its `/api/ingest` address.
+
 ## Backup and recovery
 
 Stop the service before copying the entire data directory, including SQLite and private provider files, to access-controlled backup storage. Restore with the service stopped and preserve file ownership. Never copy only the SQLite file while it is live in WAL mode. Live database backup/restore from the UI is not implemented. The PWA offline page explains a lost connection; video downloads and offline viewing are not implemented.
