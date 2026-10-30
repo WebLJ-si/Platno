@@ -75,6 +75,13 @@ const PASSWORD = 'seek password 12345';
       await page.screenshot({path:'/tmp/plexv2-player-settings.png'});
       await page.locator('#player-settings-toggle').click();
       await page.screenshot({path:'/tmp/plexv2-player-clean.png'});
+      // Leaving the player with the back arrow must also leave fullscreen.
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.mouse.move(640, 500); await page.locator('button[aria-label="Fullscreen"]').click();
+      await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 });
+      await page.locator('button[aria-label="Back to library"]').click();
+      await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
+      assert(await page.locator('#dialog').isHidden(), `${mode}: the player closed`);
       await page.evaluate(() => dialog.close()); await page.waitForTimeout(300);
     }
     assert.deepEqual(errors, []);

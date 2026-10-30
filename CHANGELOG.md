@@ -11,6 +11,7 @@ are built from the matching section.
 - Pausing shows a short animated pause icon and gently dims the picture. A pause no longer restarts playback unless it lasted over a minute and a half, so resuming does not rebuffer.
 - The header shows the episode title next to the season and episode.
 - Controls hide after 5 seconds of no mouse movement, but stay while the pointer is on them. Subtitles sit above the controls and move down when the controls hide.
+- Leaving the player with the back arrow also leaves fullscreen.
 - Space always plays or pauses, even right after clicking a control. Up/Down change the volume and 0 to 9 jump through the video.
 
 ### Brand
