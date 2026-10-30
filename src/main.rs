@@ -128,7 +128,7 @@ fn db(app: &App) -> Connection {
     c
 }
 fn init(c: &Connection) {
-    c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, root TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, parsed TEXT NOT NULL, result TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 1, scanned TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, value TEXT NOT NULL, saved INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS watch_progress(path TEXT PRIMARY KEY, position REAL NOT NULL, duration REAL NOT NULL, updated_at INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS libraries(id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('movie','tv','video','other')), roots TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS library_files(path TEXT PRIMARY KEY, library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE); INSERT OR IGNORE INTO libraries(name,kind,created_at) VALUES('Movies','movie',0),('TV Shows','tv',0),('Videos','video',0); INSERT OR IGNORE INTO settings(key,value) VALUES('library_auto_sort','true'); PRAGMA foreign_keys=ON;").unwrap();
+    c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, root TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, parsed TEXT NOT NULL, result TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 1, scanned TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY, value TEXT NOT NULL, saved INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS watch_progress(path TEXT PRIMARY KEY, position REAL NOT NULL, duration REAL NOT NULL, updated_at INTEGER NOT NULL, completed INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS libraries(id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('mixed','movie','tv','video','other')), roots TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS library_files(path TEXT PRIMARY KEY, library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE); INSERT OR IGNORE INTO settings(key,value) VALUES('library_auto_sort','true'); PRAGMA foreign_keys=ON;").unwrap();
     let has_completed: bool = c
         .prepare("PRAGMA table_info(watch_progress)")
         .and_then(|mut s| {
@@ -142,14 +142,40 @@ fn init(c: &Connection) {
             "ALTER TABLE watch_progress ADD COLUMN completed INTEGER NOT NULL DEFAULT 0;",
         );
     }
+    migrate_libraries(c).expect("library migration");
+    c.execute("CREATE INDEX IF NOT EXISTS library_files_library ON library_files(library_id)", []).expect("library index");
     backfill_library_assignments(c);
+}
+// Rebuild the old CHECK constraint without touching media, IDs or memberships.
+fn migrate_libraries(c: &Connection) -> rusqlite::Result<()> {
+    let schema: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='libraries'", [], |r| r.get(0))?;
+    if !schema.contains("'mixed'") {
+        c.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        let result = (|| {
+            let tx = c.unchecked_transaction()?;
+            tx.execute_batch("CREATE TABLE libraries_updated(id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, kind TEXT NOT NULL CHECK(kind IN ('mixed','movie','tv','video','other')), roots TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL);
+                INSERT INTO libraries_updated SELECT id,name,kind,roots,created_at FROM libraries;
+                DROP TABLE libraries; ALTER TABLE libraries_updated RENAME TO libraries;")?;
+            tx.commit()
+        })();
+        c.execute_batch("PRAGMA foreign_keys=ON;")?;
+        result?;
+    }
+    // Only untouched, empty rows from the old seed qualify, and only once.
+    let tx = c.unchecked_transaction()?;
+    let migrated: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key='library_defaults_removed')", [], |r| r.get(0))?;
+    if !migrated {
+        tx.execute("DELETE FROM libraries WHERE created_at=0 AND roots='[]' AND ((name='Movies' AND kind='movie') OR (name='TV Shows' AND kind='tv') OR (name='Videos' AND kind='video')) AND NOT EXISTS(SELECT 1 FROM library_files WHERE library_id=libraries.id)", [])?;
+        tx.execute("INSERT INTO settings(key,value) VALUES('library_defaults_removed','true')", [])?;
+    }
+    tx.commit()
 }
 fn library_kind_for_result(result:&Value)->&'static str {
     match result["kind"].as_str().unwrap_or("") {"movie"=>"movie","tv"|"extra"=>"tv","video"=>"video",_=>"video"}
 }
 fn backfill_library_assignments(c:&Connection) {
     let rows:Vec<(String,String)>=c.prepare("SELECT path,result FROM files WHERE path NOT IN (SELECT path FROM library_files)").and_then(|mut s|s.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))?.collect()).unwrap_or_default();
-    for (path,raw) in rows {let result:Value=serde_json::from_str(&raw).unwrap_or_default();let kind=library_kind_for_result(&result);let _=c.execute("INSERT OR IGNORE INTO library_files(path,library_id) SELECT ?1,id FROM libraries WHERE kind=?2 ORDER BY id LIMIT 1",params![path,kind]);}
+    for (path,raw) in rows {let result:Value=serde_json::from_str(&raw).unwrap_or_default();let _=assign_scanned_file(c,&path,&result,None,true);}
 }
 // Repair old automatic records whose paths identify bonus content. Locked
 // user decisions are never changed; no filesystem media reads are required.
@@ -461,7 +487,7 @@ async fn identify(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
 }
 async fn identify_online(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
     let mut result = json!({"kind":p.kind,"title":p.title,"season":p.season,"episodes":p.episodes,"episode_title":p.episode_title,"year":p.year.map(|y|y.to_string()),"confidence":0,"explanation":p.explanation,"subtitles":subs,"candidates":[],"provider":"","order":"aired","requires_review":false,"matcher_version":7});
-    if p.kind == "extra" {
+    if matches!(p.kind.as_str(), "extra"|"video") {
         return result;
     }
     let query = urlencoding::encode(&p.title);
@@ -767,8 +793,22 @@ async fn identify_online(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
     result
 }
 fn assign_scanned_file(c:&Connection,path:&str,result:&Value,library_id:Option<i64>,auto_sort:bool) -> rusqlite::Result<()> {
-    let result_kind=library_kind_for_result(result);
-    let target=if auto_sort && matches!(result_kind,"movie"|"tv") {c.query_row("SELECT id FROM libraries WHERE kind=?1 ORDER BY id LIMIT 1",[result_kind],|r|r.get::<_,i64>(0)).ok()} else {library_id.or_else(||c.query_row("SELECT id FROM libraries WHERE kind=?1 ORDER BY id LIMIT 1",[result_kind],|r|r.get::<_,i64>(0)).ok())};
+    // An explicit scan target always wins. Global scans route by the most
+    // specific configured folder, then retain membership, then use media type.
+    let target = if library_id.is_some() { library_id } else if auto_sort {
+        let libs:Vec<(i64,String,Vec<String>)> = c.prepare("SELECT id,kind,roots FROM libraries ORDER BY id")?.query_map([],|r| {
+            let roots:String=r.get(2)?;
+            Ok((r.get(0)?,r.get(1)?,serde_json::from_str(&roots).unwrap_or_default()))
+        })?.collect::<rusqlite::Result<_>>()?;
+        let folder_target = libs.iter().flat_map(|(id,_,roots)| {
+            roots.iter().filter_map(move |root| {
+                if Path::new(path).starts_with(Path::new(root)) {Some((Path::new(root).components().count(),*id))} else {None}
+            })
+        }).max_by(|a,b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1))).map(|(_,id)|id);
+        folder_target.or_else(|| c.query_row("SELECT library_id FROM library_files WHERE path=?1", [path], |r| r.get(0)).ok())
+            .or_else(|| libs.iter().find(|(_,kind,_)|kind==library_kind_for_result(result)).map(|(id,_,_)|*id))
+            .or_else(|| libs.iter().find(|(_,kind,_)|kind=="mixed").map(|(id,_,_)|*id))
+    } else { None };
     if let Some(id)=target {c.execute("INSERT INTO library_files(path,library_id) VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET library_id=excluded.library_id",params![path,id])?;}
     Ok(())
 }
@@ -1400,15 +1440,21 @@ async fn get_library_files(State(app): State<App>, AxPath(id): AxPath<i64>) -> R
     Json(json!({"files":visible})).into_response()
 }
 async fn save_library(State(app):State<App>,Json(input):Json<LibraryInput>)->Response{
-    let name=input.name.trim();if name.is_empty()||name.chars().count()>48||name.chars().any(char::is_control)||!matches!(input.kind.as_str(),"movie"|"tv"|"video"|"other"){return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a 1–48 character name and a supported library type"}))).into_response()}
+    let name=input.name.trim();if name.is_empty()||name.chars().count()>48||name.chars().any(char::is_control)||!matches!(input.kind.as_str(),"mixed"|"movie"|"tv"|"video"|"other"){return (StatusCode::BAD_REQUEST,Json(json!({"error":"Enter a 1–48 character name and a supported library type"}))).into_response()}
     let roots=input.roots.unwrap_or_default();if roots.len()>128||roots.iter().any(|x|x.trim().is_empty()||x.len()>1024||x.chars().any(char::is_control)){return (StatusCode::BAD_REQUEST,Json(json!({"error":"Library roots must be valid, non-empty folder paths"}))).into_response()}
     let roots=serde_json::to_string(&roots).unwrap_or_else(|_|"[]".into());let c=db(&app);
     let result=if let Some(id)=input.id{c.execute("UPDATE libraries SET name=?1,kind=?2,roots=?3 WHERE id=?4",params![name,input.kind,roots,id])}else{c.execute("INSERT INTO libraries(name,kind,roots,created_at) VALUES(?1,?2,?3,?4)",params![name,input.kind,roots,Utc::now().timestamp()])};
-    match result{Ok(1)=>Json(json!({"ok":true})).into_response(),Ok(_)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"A library with that name already exists"}))).into_response()}
+    match result{Ok(1)=>Json(json!({"ok":true,"id":input.id.unwrap_or_else(||c.last_insert_rowid())})).into_response(),Ok(_)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>(StatusCode::CONFLICT,Json(json!({"error":"A library with that name already exists"}))).into_response()}
 }
 async fn delete_library(State(app):State<App>,Json(input):Json<LibraryId>)->Response{
-    let connection=db(&app);let Ok(c)=connection.unchecked_transaction() else {return StatusCode::INTERNAL_SERVER_ERROR.into_response()};let kind:Option<String>=c.query_row("SELECT kind FROM libraries WHERE id=?1",[input.id],|r|r.get(0)).ok();let Some(kind)=kind else{return StatusCode::NOT_FOUND.into_response()};let count:i64=c.query_row("SELECT COUNT(*) FROM libraries WHERE kind=?1",[kind.as_str()],|r|r.get(0)).unwrap_or(0);if count<=1{return (StatusCode::CONFLICT,Json(json!({"error":"Keep at least one library of each type; rename it if needed"}))).into_response()}
-    if c.execute("UPDATE library_files SET library_id=(SELECT id FROM libraries WHERE kind=?1 AND id<>?2 ORDER BY id LIMIT 1) WHERE library_id=?2",params![kind,input.id]).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response();}
+    let connection=db(&app);let Ok(c)=connection.unchecked_transaction() else {return StatusCode::INTERNAL_SERVER_ERROR.into_response()};
+    let kind:Option<String>=c.query_row("SELECT kind FROM libraries WHERE id=?1",[input.id],|r|r.get(0)).ok();
+    let Some(kind)=kind else{return StatusCode::NOT_FOUND.into_response()};
+    let replacement:Option<i64>=c.query_row("SELECT id FROM libraries WHERE id<>?1 AND (kind=?2 OR kind='mixed') ORDER BY (kind=?2) DESC,id LIMIT 1",params![input.id,kind],|r|r.get(0)).ok();
+    if let Some(id)=replacement {
+        if c.execute("UPDATE library_files SET library_id=?1 WHERE library_id=?2",params![id,input.id]).is_err(){return StatusCode::INTERNAL_SERVER_ERROR.into_response();}
+    }
+    // Cascade removes only membership; files and watch history stay available.
     match c.execute("DELETE FROM libraries WHERE id=?1",[input.id]){Ok(1)=>if c.commit().is_ok(){Json(json!({"ok":true,"media_kept":true})).into_response()}else{StatusCode::INTERNAL_SERVER_ERROR.into_response()},Ok(_)=>StatusCode::NOT_FOUND.into_response(),Err(_)=>StatusCode::INTERNAL_SERVER_ERROR.into_response()}
 }
 async fn get_library_settings(State(app):State<App>)->Json<Value>{let c=db(&app);let auto=c.query_row("SELECT value FROM settings WHERE key='library_auto_sort'",[],|r|r.get::<_,String>(0)).map(|v|v=="true").unwrap_or(true);let raw=c.query_row("SELECT value FROM settings WHERE key='library_scan_roots'",[],|r|r.get::<_,String>(0)).unwrap_or_else(|_|"[]".into());Json(json!({"auto_sort":auto,"scan_roots":serde_json::from_str::<Value>(&raw).unwrap_or(json!([]))}))}
@@ -2133,6 +2179,8 @@ mod integration_tests {
         availability_checked_at: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         };
         init(&db(&app));
+        // These fixtures explicitly configure libraries; production starts empty.
+        db(&app).execute_batch("INSERT INTO libraries(name,kind,created_at) VALUES('Movies','movie',1),('TV Shows','tv',1),('Videos','video',1);").unwrap();
         let show =
             json!([{ "show": {"id": 101, "name":"Regular Show", "premiered":"2010-01-01"} }]);
         let eps = json!([
@@ -2324,23 +2372,59 @@ mod integration_tests {
         assert_eq!(db(&app).query_row("SELECT COUNT(*) FROM profile_watchlist WHERE profile_id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
+    #[test]
+    fn fresh_install_has_no_libraries_and_restart_does_not_recreate_them() {
+        let c=Connection::open_in_memory().unwrap();init(&c);
+        assert!(library_list(&c).is_empty());
+        c.execute("INSERT INTO libraries(name,kind,created_at) VALUES('Media','mixed',1)",[]).unwrap();
+        init(&c);assert_eq!(library_list(&c).len(),1);
+        c.execute("DELETE FROM libraries",[]).unwrap();init(&c);assert!(library_list(&c).is_empty());
+    }
+    #[test]
+    fn old_library_schema_migrates_without_losing_ids_roots_or_memberships() {
+        let c=Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE libraries(id INTEGER PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE UNIQUE,kind TEXT NOT NULL CHECK(kind IN ('movie','tv','video','other')),roots TEXT NOT NULL DEFAULT '[]',created_at INTEGER NOT NULL);
+            CREATE TABLE library_files(path TEXT PRIMARY KEY,library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE);
+            INSERT INTO libraries(id,name,kind,created_at) VALUES(1,'Movies','movie',0),(2,'TV Shows','tv',0),(3,'Videos','video',0),(4,'Custom','other',1);
+            UPDATE libraries SET roots='[\"/Shows\"]' WHERE id=2;
+            INSERT INTO library_files VALUES('/existing.mp4',1);").unwrap();
+        init(&c);
+        let libs=library_list(&c);assert_eq!(libs.len(),3);
+        assert!(libs.iter().any(|l|l["id"]==1));assert!(libs.iter().any(|l|l["id"]==2&&l["roots"][0]=="/Shows"));
+        assert!(!libs.iter().any(|l|l["id"]==3));
+        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/existing.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(c.query_row("PRAGMA foreign_keys",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        c.execute("INSERT INTO libraries(name,kind,created_at) VALUES('Mixed','mixed',1)",[]).unwrap();
+        assert!(c.execute("INSERT INTO library_files VALUES('/invalid',999)",[]).is_err());
+        init(&c);assert_eq!(library_list(&c).len(),4);
+    }
+    #[test]
+    fn shared_folder_keeps_all_media_in_one_mixed_library() {
+        let c=Connection::open_in_memory().unwrap();init(&c);
+        c.execute("INSERT INTO libraries(name,kind,roots,created_at) VALUES('My media','mixed','[\"/Media\"]',1)",[]).unwrap();let id=c.last_insert_rowid();
+        for (path,kind) in [("/Media/Film.2020.mp4","movie"),("/Media/Show/S01E01.mkv","tv"),("/Media/Clips/VID_001.mp4","video")] {
+            assign_scanned_file(&c,path,&json!({"kind":kind}),None,true).unwrap();
+            assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path=?1",[path],|r|r.get::<_,i64>(0)).unwrap(),id);
+        }
+        assert_eq!(library_list(&c).len(),1);
+        c.execute("INSERT INTO libraries(name,kind,roots,created_at) VALUES('Clips','video','[\"/Media/Clips\"]',2)",[]).unwrap();let clips=c.last_insert_rowid();
+        assign_scanned_file(&c,"/Media/Clips/VID_001.mp4",&json!({"kind":"movie"}),None,true).unwrap();
+        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/Clips/VID_001.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),clips);
+        assign_scanned_file(&c,"/Media/Clips/VID_001.mp4",&json!({"kind":"tv"}),Some(id),true).unwrap();
+        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/Clips/VID_001.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),id);
+        // Folder names sharing a string prefix are not children.
+        assign_scanned_file(&c,"/Media/ClipsExtra/Film.mp4",&json!({"kind":"movie"}),None,true).unwrap();
+        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/ClipsExtra/Film.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),id);
+    }
     #[tokio::test]
-    async fn libraries_can_be_named_and_auto_sort_preserves_movie_tv_types() {
-        let (_temp, app) = fixture();
-        let created=save_library(State(app.clone()),Json(LibraryInput{id:None,name:"YouTube videos".into(),kind:"video".into(),roots:None})).await;
-        assert_eq!(created.status(),StatusCode::OK);
-        let c=db(&app);
-        let video_id:i64=c.query_row("SELECT id FROM libraries WHERE name='YouTube videos'",[],|r|r.get(0)).unwrap();
-        let movie_id:i64=c.query_row("SELECT id FROM libraries WHERE kind='movie'",[],|r|r.get(0)).unwrap();
-        let show_id:i64=c.query_row("SELECT id FROM libraries WHERE kind='tv'",[],|r|r.get(0)).unwrap();
-        assign_scanned_file(&c,"/Media/movie.mp4",&json!({"kind":"movie"}),Some(video_id),true).unwrap();
-        assign_scanned_file(&c,"/Media/episode.mp4",&json!({"kind":"tv"}),Some(video_id),true).unwrap();
-        assign_scanned_file(&c,"/Media/clip.mp4",&json!({"kind":"video"}),Some(video_id),true).unwrap();
-        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/movie.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),movie_id);
-        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/episode.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),show_id);
-        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/clip.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),video_id);
-        assign_scanned_file(&c,"/Media/manual.mp4",&json!({"kind":"tv"}),Some(video_id),false).unwrap();
-        assert_eq!(c.query_row("SELECT library_id FROM library_files WHERE path='/Media/manual.mp4'",[],|r|r.get::<_,i64>(0)).unwrap(),video_id);
+    async fn last_library_can_be_deleted_without_deleting_media_or_reappearing() {
+        let (_temp,app)=fixture();let c=db(&app);c.execute("DELETE FROM libraries",[]).unwrap();
+        c.execute("INSERT INTO libraries(name,kind,created_at) VALUES('My media','mixed',1)",[]).unwrap();let id=c.last_insert_rowid();
+        let parsed=parse(Path::new("/Media/Film.2020.mp4"));
+        persist_scanned_file(&c,"/Media/Film.2020.mp4","/Media",1,0,&parsed,&json!({"kind":"movie"}),Some(id),true).unwrap();
+        assert_eq!(delete_library(State(app),Json(LibraryId{id})).await.status(),StatusCode::OK);
+        assert_eq!(c.query_row("SELECT COUNT(*) FROM files",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        init(&c);assert!(library_list(&c).is_empty());
     }
 
     #[tokio::test]
@@ -2588,6 +2672,16 @@ mod integration_tests {
         )
         .await;
         assert_eq!(get("The Power.mkv")["kind"], "extra");
+    }
+    #[tokio::test]
+    async fn arbitrary_clips_do_not_become_fabricated_series() {
+        let (_temp,app)=fixture();
+        let p=parse(Path::new("/Media/Garden walkthrough.mp4"));
+        seed_cache(&app,"tvmaze:search:media",json!([]));
+        let clip=identify(&app,&p,vec![]).await;
+        assert_eq!(clip["kind"],"video");assert_eq!(clip["title"],"Garden walkthrough");
+        let camera=identify(&app,&parse(Path::new("/Media/VID_20201010_123400.mp4")),vec![]).await;
+        assert_eq!(camera["kind"],"video");assert!(camera["provider_id"].is_null());
     }
     #[tokio::test]
     async fn no_token_does_not_fabricate_movie_match() {

@@ -41,13 +41,38 @@ const PASSWORD = 'seek password 12345';
       await page.waitForFunction(() => document.querySelector('#player-video').currentTime > 0.5 || playerState.mode === 'direct', null, { timeout: 20000 });
       const before = (await state()).value; await page.waitForTimeout(3500); const after = await state();
       assert(after.value >= before + 2, `${mode}: the bar follows playback after a seek (${before} -> ${after.value})`);
+      // Secondary controls stay in a single, keyboard-dismissable settings panel.
+      await page.locator('#player-settings-toggle').click();
+      assert(await page.locator('#player-settings').isVisible());
+      assert.equal(await page.locator('.player-action-row button').count(), 3);
+      assert(await page.locator('#player-settings #player-quality').isVisible());
+      await page.keyboard.press('Escape');
+      assert(await page.locator('#player-settings').isHidden());
+      assert(await page.locator('#dialog').isVisible(), 'Escape dismisses settings before the player');
+      await page.locator('#player-settings-toggle').click();
       // Fullscreen takes the player area (a <dialog> itself cannot go fullscreen) and leaves again.
       await page.mouse.move(640, 500); await page.locator('button[aria-label="Fullscreen"]').click();
       await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 });
       const fullscreen = await page.evaluate(() => { const r = document.querySelector('#player-shell').getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height), innerWidth, innerHeight]; });
       assert.deepEqual(fullscreen.slice(0, 2), fullscreen.slice(2), `${mode}: the player fills the screen`);
       await page.mouse.move(600, 450); await page.locator('button[aria-label="Fullscreen"]').click(); await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
+      await page.locator('#player-settings-toggle').click();
       await page.locator('#player-shell').focus(); await page.keyboard.press('f'); await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 }); await page.keyboard.press('f'); await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
+      // Episode and settings panels are mutually exclusive; selectors keep working.
+      await page.evaluate(() => { const f=files.find(x=>x.path===playerState.path); f.result={...f.result,kind:'tv',provider:'tvmaze',provider_id:999,season:1,episodes:[1],confidence:100}; const actions=document.querySelector('.player-top-actions'); actions.insertAdjacentHTML('afterbegin',episodeSelectors(f)); document.querySelector('#player-shell').insertAdjacentHTML('beforeend',episodeSelectors(f,true)); });
+      await page.locator('#player-episodes-toggle').click();
+      assert(await page.locator('#player-season').isVisible());
+      await page.locator('#player-settings-toggle').click();
+      assert(await page.locator('#player-episodes').isHidden());
+      for(const [width,height] of [[320,640],[390,844],[768,900],[844,390],[1280,800]]){
+        await page.setViewportSize({width,height});
+        assert(await page.locator('#player-settings').evaluate(el=>{const r=el.getBoundingClientRect(),shell=document.querySelector('#player-shell').getBoundingClientRect();return r.left>=shell.left&&r.right<=shell.right+1&&r.top>=shell.top&&r.bottom<=shell.bottom+1&&el.scrollWidth<=el.clientWidth+1}), `settings fit ${width}x${height}`);
+        assert(await page.locator('#player-shell').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+      }
+      await page.locator('#player-settings').evaluate(el=>el.scrollTop=0);
+      await page.screenshot({path:'/tmp/plexv2-player-settings.png'});
+      await page.locator('#player-settings-toggle').click();
+      await page.screenshot({path:'/tmp/plexv2-player-clean.png'});
       await page.evaluate(() => dialog.close()); await page.waitForTimeout(300);
     }
     assert.deepEqual(errors, []);

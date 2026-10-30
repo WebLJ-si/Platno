@@ -1,10 +1,13 @@
 // Real-Chrome test of the first-run guide and the missing-API-key help. Needs the Node `playwright` package.
-const assert = require('node:assert/strict'), { chromium } = require('playwright'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net'), { spawn } = require('node:child_process');
+const assert = require('node:assert/strict'), { chromium } = require('playwright'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net'), { spawn, execFileSync } = require('node:child_process');
 const PASSWORD = 'guide password 12345';
 (async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plexv2-guide-')), data = path.join(tmp, 'data'), media = path.join(tmp, 'media'), work = path.join(tmp, 'work');
   fs.mkdirSync(data); fs.mkdirSync(path.join(media, 'Movies'), { recursive: true });
   fs.writeFileSync(path.join(media, 'Movies', 'Test.Film.2020.mkv'), 'not a real video');
+  fs.writeFileSync(path.join(media, 'Movies', 'VID_20201010_123400.mp4'), 'not a real video');
+  fs.mkdirSync(path.join(media,'Movies','Zzq Setup Series','Season 01'),{recursive:true});
+  fs.writeFileSync(path.join(media,'Movies','Zzq Setup Series','Season 01','Zzq.Setup.Series.S01E01.mkv'),'not a real video');
   const port = await new Promise(r => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
   const binary = process.env.PLEXV2_TEST_BINARY || path.resolve('target/release/smart-media-scanner');
   const env = { ...process.env, SMART_MEDIA_DATA: data, SMART_MEDIA_HOST: '127.0.0.1', SMART_MEDIA_PORT: String(port), TMDB_TOKEN: '', OPENSUBTITLES_API_KEY: '', SMART_MEDIA_COOKIE_SECURE: '0', SMART_MEDIA_WIKIDATA: 'off' };
@@ -40,7 +43,13 @@ const PASSWORD = 'guide password 12345';
     await page.setViewportSize({ width: 1280, height: 860 });
 
     // Media folders: existing and missing folders are told apart before saving.
+    execFileSync('python3',['-c',"import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute('INSERT OR REPLACE INTO cache(key,value,saved) VALUES(?,?,?)',('tvmaze:search:zzq setup series','[]',int(time.time()))); c.commit()",path.join(data,'library.sqlite3')]);
+    assert.deepEqual(await page.evaluate(async ()=>(await api('/api/libraries')).libraries),[]);
     await primary(); await title('Where is your media');
+    assert.equal(await page.locator('[data-lib-kind]').count(),1);
+    assert.equal(await page.locator('#sg-kind-0').inputValue(),'mixed');
+    await page.waitForFunction(()=>document.querySelector('#sg-body').getAnimations({subtree:true}).every(a=>a.playState==='finished'));
+    await page.screenshot({path:'/tmp/plexv2-setup-mixed.png'});
 
     // The folder browser works in any browser and any system: pick the folder from a list instead of typing it.
     await page.locator('[data-act="choose-root"][data-n="0"]').click();
@@ -63,6 +72,8 @@ const PASSWORD = 'guide password 12345';
     await page.locator('.sg-x').first().click();
     await page.locator('#sg-add-0').fill(path.join(media, 'Movies')); await page.locator('[data-act="add-root"][data-n="0"]').click();
     await page.locator('#sg-roots-0 .sg-pill[data-k="ok"]').waitFor();
+    await page.locator('[data-act="add-library"]').click();
+    await page.locator('#sg-kind-1').selectOption('video');
     await page.locator('#sg-add-1').fill('/definitely/missing/folder'); await page.locator('[data-act="add-root"][data-n="1"]').click();
     await page.locator('#sg-roots-1 .sg-pill[data-k="missing"]').waitFor();
     await page.locator('#sg-add-1').fill('relative/path'); await page.locator('[data-act="add-root"][data-n="1"]').click();
@@ -71,8 +82,13 @@ const PASSWORD = 'guide password 12345';
     assert.equal(await page.locator('#sg-roots-1 .sg-root').count(), 0);
     await page.locator('#sg-add-0').fill(path.join(media, 'Movies')); await page.locator('[data-act="add-root"][data-n="0"]').click();
     assert((await page.locator('#sg-msg-0').textContent()).includes('already'));
+    await page.locator('[data-act="remove-root"][data-n="0"]').click();
+    await page.locator('#sg-add-0').fill(path.join(media,'Movies'));
     await primary(); await title('Other locations');
-    assert(!(await page.evaluate(async () => (await (await fetch('/api/libraries')).json()).libraries.every(l => l.roots.length === 0))), 'folders were saved');
+    const savedLibraries=await page.evaluate(async ()=>(await api('/api/libraries')).libraries);
+    assert.equal(savedLibraries.length,1,'only the configured library is saved');
+    assert.equal(savedLibraries[0].kind,'mixed');
+    assert.equal(savedLibraries[0].roots.length,1);
 
     // Conversion folder: refuses media folders, accepts a new writable one.
     await page.locator('#sg-work').fill(path.join(media, 'Movies', 'conversion')); await page.locator('[data-act="save-work"]').click();
@@ -91,6 +107,11 @@ const PASSWORD = 'guide password 12345';
     await page.locator('#sg-scan-btn').click();
     await page.locator('.sg-result').waitFor({ timeout: 30000 });
     assert((await page.locator('.sg-result').textContent()).includes('1 movies'));
+    const detected=await page.evaluate(async()=>await api('/api/files'));
+    assert(detected.some(f=>f.result.kind==='video'),'camera clips are videos');
+    assert(detected.some(f=>f.result.kind==='tv'),'episode filenames are series');
+    assert.equal(detected.length,3);
+    assert(detected.every(f=>f.library_ids.length===1 && f.library_ids[0]===savedLibraries[0].id),'one folder feeds one mixed library');
     await primary(); await title('Who will use this');
     await page.locator('#sg-a-email').fill('viewer@example.test'); await page.locator('#sg-a-pass').fill('viewer password 123'); await page.locator('#sg-a-pass2').fill('different password');
     await page.locator('[data-act="add-account"]').click(); await page.waitForFunction(() => document.querySelector('#sg-a-msg').dataset.bad === '1');
@@ -128,6 +149,16 @@ const PASSWORD = 'guide password 12345';
     await page.locator('#account-controls .profile-trigger').waitFor();
     await page.reload(); await page.locator('#account-controls .profile-trigger').waitFor(); await page.waitForTimeout(500);
     assert.equal(await page.locator('.sg').count(), 0, 'a finished guide does not return');
+    await page.evaluate(id=>view('library:'+id),savedLibraries[0].id);
+    for(const name of ['Movies','TV shows','Videos & other files']) await page.locator('#app').getByRole('heading',{name,exact:true,level:2}).waitFor();
+    assert.equal(await page.locator('#app .card').count(),3);
+    await page.screenshot({path:'/tmp/plexv2-library-mixed.png'});
+    for(const width of [320,390,768,1440]){
+      await page.setViewportSize({width,height:860});
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'mixed library fits '+width);
+    }
+    await page.setViewportSize({width:1280,height:860});
+
 
     // Using a feature that needs a missing key explains it, in place.
     await page.evaluate(() => view('subtitles')); await page.locator('#subtitle-query').fill('The Matrix'); await page.getByRole('button', { name: 'Search', exact: true }).click();

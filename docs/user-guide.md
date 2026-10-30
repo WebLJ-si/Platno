@@ -26,7 +26,7 @@ By default the data directory is the system application data directory for smart
 
 ## Libraries and folders
 
-In Settings find Libraries. You can create a library, rename it and set its type: Movies, TV shows, Videos or Other. Videos and Other let you organize arbitrary videos; they are not a music or photo player.
+A new installation starts without libraries. In the setup guide, give your first library a name, choose Automatic · mixed media and add one shared media folder. Movies and series are identified from file names, episode numbers and online matches; camera clips and unmatched videos stay browsable by folder. All of them remain in that one library. Add more libraries only when you want them, either during setup or in Settings. Other available types are Movies, TV shows, Videos and Other.
 
 In the Folders field enter one absolute path per line. The path must exist on the computer or container where the server runs. A path on your phone or another computer is not a path on the server.
 
@@ -40,9 +40,9 @@ D:\Media\Movies
 
 Browse opens a folder list in the page: it shows the folders of the computer or container that runs Platno (including drives on Windows and /media in Docker), so it works in any browser on any system. You can also type the path by hand. In the example Docker setup your media folders appear under /media; host paths are not automatically the same inside the container.
 
-After identification, Auto-sort places movies and series in the matching library. Other videos go to the selected target library. If you turn Auto-sort off you must choose a target library, and every scanned video goes into it.
+For separate collections, create named libraries and assign folders to each. A scan with a selected library puts every file in that library. With “Use library folders” and automatic organization enabled, the most specific matching folder wins; existing memberships are kept when no folder rule matches, then new files use a matching media type or mixed library. No libraries are created automatically. If automatic organization is off, choose a target library.
 
-Deleting a library does not delete videos. File membership moves to another library of the same type. The last library of each type cannot be deleted; you can rename it.
+Any library can be deleted, including the last one. This keeps media, identification and watch history. Membership moves to another library of the same type or a mixed library when one exists; otherwise the files remain in Overview until assigned again. Libraries are not recreated on restart. Upgrades remove only untouched, empty legacy default libraries and preserve configured or populated libraries.
 
 ## Scanning
 
@@ -95,6 +95,8 @@ Mark unwatched / reset is shown only when at least one of the selected local fil
 Continue Watching offers to resume a saved position. When you reopen a video you can choose Continue watching or Start from beginning. The position is saved periodically and sent once more when the player closes or the tab is hidden. If power is lost suddenly, the last second is not guaranteed.
 
 ## Playback and quality
+
+The bottom of the player contains the timeline, back 10 seconds, play/pause and forward 10 seconds. Use the Episodes icon at the top to choose a season or episode. The Settings gear groups quality, speed, subtitles and synchronization, volume, audio tracks, fullscreen, Picture-in-Picture and stream statistics. Escape closes the open panel first; clicking outside the panel also dismisses it.
 
 Play opens the player. Compatible H.264/AAC MP4 files are sent directly using HTTP byte-range requests. Other formats are converted to H.264/AAC when needed. Playback never changes the original.
 

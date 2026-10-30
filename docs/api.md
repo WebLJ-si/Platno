@@ -50,6 +50,8 @@ Settings accept a fixed allowlist of values: playback quality/speed/volume, audi
 | POST | `/api/playback/watched` | `{paths:[...],action:"watched"}` or `action:"reset"`; validates the complete batch before mutation |
 | POST | `/api/playback/activity` | path, position, duration, mode, active; heartbeat used by the admin dashboard |
 
+Fresh databases return an empty library list. `POST /api/admin/libraries` accepts `name`, `kind` (`mixed`, `movie`, `tv`, `video`, `other`), optional `id` to update, and optional `roots`; a successful response includes the saved `id`. Mixed libraries retain movies, series and videos together. An explicit scan `library_id` wins over automatic organization. Shared scans with automatic organization use the most specific configured folder, then existing membership, then a matching type or mixed library. Deleting a library, including the last one, preserves file records and media; memberships move to a compatible remaining library or are removed. No library is seeded or recreated on startup.
+
 Progress positions/durations are finite seconds within the supported 0–86400 range. Reset removes profile progress. It does not delete media, watchlist entries or another profile's history.
 
 ## Playback

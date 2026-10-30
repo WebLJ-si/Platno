@@ -288,6 +288,11 @@ pub fn parse(path: &Path) -> Parsed {
     } else {
         None
     };
+    let personal_video = season.is_none() && episodes.is_empty() && (
+        re(r"(?i)^(?:IMG|VID|MOV|DSC|PXL|GOPR)[_ -]?[0-9]").is_match(&stem)
+        || path.ancestors().skip(1).filter_map(|p|p.file_name()).any(|name|matches!(normalize(&name.to_string_lossy()).as_str(), "home videos"|"home movies"|"clips"|"recordings"))
+    );
+    let title = if personal_video {clean(&stem)} else {title};
     Parsed {
         title,
         alternate_titles,
@@ -296,7 +301,9 @@ pub fn parse(path: &Path) -> Parsed {
         season,
         episodes,
         year,
-        kind: if extra {
+        kind: if personal_video {
+            "video"
+        } else if extra {
             "extra"
         } else if season.is_some() || !year_re.is_match(&stem) {
             "tv"
@@ -315,6 +322,14 @@ pub fn parse(path: &Path) -> Parsed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn camera_clips_are_videos_but_episode_evidence_stays_a_series() {
+        for path in ["/Media/IMG_20201010.mp4","/Media/VID_001.mp4","/Media/Clips/Holiday.2020.mp4","/Media/Recordings/Meeting.mkv"] {
+            assert_eq!(parse(Path::new(path)).kind,"video","{path}");
+        }
+        assert_eq!(parse(Path::new("/Media/Clips/Show.S01E01.mkv")).kind,"tv");
+        assert_eq!(parse(Path::new("/Media/Movie.2020.mkv")).kind,"movie");
+    }
     #[test]
     fn numbered_and_ranges() {
         let p = parse(Path::new("/Media/Rick and morty s1/S01E01-E03.mkv"));

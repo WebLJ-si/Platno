@@ -30,6 +30,7 @@ function png() { // a real 2x3 PNG, large enough to pass the server's minimum si
     await page.locator('.sg').waitFor();
     await page.evaluate(() => post('/api/owner/settings', { key: 'setup_guide', value: 'done' }));
     await page.reload(); await page.locator('#account-controls .profile-trigger').waitFor();
+    await page.evaluate(async()=>{for(const [name,kind] of [['Movies','movie'],['TV Shows','tv']])await post('/api/admin/libraries',{name,kind});await loadAuth()});
     const scan = async () => { await page.evaluate(async root => { await post('/api/scan', { roots: [root], full_scan: true }); while ((await api('/api/status')).running) await new Promise(r => setTimeout(r, 200)); await refreshFiles(); }, media); };
     await scan();
 

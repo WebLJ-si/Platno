@@ -6,8 +6,9 @@
   const CHECK = '<svg class="sg-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 10.5l3.7 3.7 7.3-8.4"/></svg>';
   const DASH = '<svg class="sg-check" viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 10h9"/></svg>';
   const WARN = '<svg class="sg-warn-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.2l7.6 13.3H2.4z"/><path d="M10 8.4v3.6M10 14.2v.4"/></svg>';
-  const KIND = { movie: 'Movies', tv: 'TV shows', video: 'Other videos', other: 'Other' };
+  const KIND = { mixed: 'Automatic · mixed media', movie: 'Movies', tv: 'TV shows', video: 'Other videos', other: 'Other' };
   const KIND_HELP = {
+    mixed: 'One shared folder is enough. Movies and series are recognized automatically; other videos stay browsable by folder.',
     movie: 'Feature films. One folder per movie or a flat folder both work.',
     tv: 'Series, usually Show / Season 01 / episode files.',
     video: 'Home videos, clips and anything that is not a movie or an episode.',
@@ -98,6 +99,7 @@
     document.body.append(root); root.showModal();
     root.addEventListener('cancel', e => e.preventDefault());
     root.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b && !b.disabled) ACT[b.dataset.act]?.(b, e); });
+    root.addEventListener('change', e => { if (e.target.dataset.libKind !== undefined) { const n=Number(e.target.dataset.libKind); S.libs[n].kind=e.target.value; e.target.closest('.sg-card').querySelector('p.muted').textContent=KIND_HELP[e.target.value] || ''; } });
     document.addEventListener('keydown', trap);
     requestAnimationFrame(() => root.classList.add('on'));
   }
@@ -176,6 +178,7 @@
   async function refreshLibs() {
     const data = await api('/api/libraries');
     S.libs = (data.libraries || []).map(l => ({ id: l.id, name: l.name, kind: l.kind, roots: [...(l.roots || [])] }));
+    if (!S.libs.length) S.libs = [{ name: 'My media', kind: 'mixed', roots: [] }];
     S.autoSort = data.auto_sort !== false;
     S.libs.flatMap(l => l.roots).forEach(checkRoot);
   }
@@ -199,8 +202,8 @@
     }),
     libraries: () => ({
       title: 'Where is your media?',
-      lead: 'Add the folders for each library. The scanner only reads them; your files are never changed or moved.',
-      html: `${S.libs.map(libCard).join('') || '<p>No libraries found.</p>'}<label class="sg-check-row" data-stagger style="--i:${S.libs.length + 3}"><input type="checkbox" id="sg-autosort" ${S.autoSort ? 'checked' : ''}> Sort videos automatically into Movies and TV shows by what they look like</label>
+      lead: 'Start with one shared folder and Automatic to recognize movies, series and other videos. Or add your own libraries and choose a folder for each. Files stay in place.',
+      html: `${S.libs.map(libCard).join('')}<button class="secondary" data-act="add-library">+ Add another library</button><p class="muted">Only libraries you save are created. You can add, rename or delete them later in Settings.</p>
 <p class="muted" data-stagger style="--i:${S.libs.length + 4}">${hintPaths()}</p>`,
       primary: { label: 'Save folders and continue', act: 'save-libs' }
     }),
@@ -278,8 +281,11 @@
     if (/win/.test(os)) return 'For example D:\\Media\\Movies. Use Choose to pick it from a list.';
     return S.sys?.docker ? 'In Docker, your media folders appear under /media. Use Choose to pick one from a list.' : 'Enter the full path, for example /mnt/media/movies, or use Choose to pick it from a list.';
   }
+  function rememberLibraries() {
+    S.libs.forEach((l,n) => { l.name = $('#sg-name-'+n)?.value.trim() ?? l.name; l.kind = $('#sg-kind-'+n)?.value ?? l.kind; });
+  }
   function libCard(l, n) {
-    return `<section class="sg-card" data-stagger style="--i:${n + 3}"><div class="sg-card-h"><h3>${esc(l.name)}</h3><span class="badge">${esc(KIND[l.kind] || l.kind)}</span></div><p class="muted">${esc(KIND_HELP[l.kind] || '')}</p><ul class="sg-roots" id="sg-roots-${n}">${rootRows(n)}</ul>
+    return `<section class="sg-card" data-stagger style="--i:${n + 3}"><div class="sg-library-fields"><label for="sg-name-${n}">Library name<input id="sg-name-${n}" value="${esc(l.name)}" maxlength="48" data-lib-name="${n}"></label><label for="sg-kind-${n}">Content<select id="sg-kind-${n}" data-lib-kind="${n}">${Object.entries(KIND).map(([key,name])=>`<option value="${key}" ${l.kind===key?'selected':''}>${esc(name)}</option>`).join('')}</select></label></div><p class="muted">${esc(KIND_HELP[l.kind] || '')}</p><ul class="sg-roots" id="sg-roots-${n}">${rootRows(n)}</ul>
 <div class="sg-add"><input id="sg-add-${n}" placeholder="${esc(examplePath(l.name))}" aria-label="Folder path for ${esc(l.name)}" autocomplete="off" spellcheck="false" data-enter="add-root" data-n="${n}"><button class="secondary" data-act="add-root" data-n="${n}">Add</button><button class="secondary" data-act="choose-root" data-n="${n}">Choose</button></div><p class="sg-msg" id="sg-msg-${n}" role="status"></p></section>`;
   }
   function rootRows(n) {
@@ -414,6 +420,7 @@ SMART_MEDIA_TLS_KEY=/private/privkey.pem</pre><p class="muted">The hostname must
       await unmount(); S.open = false;
       if (S.dirty) location.reload();
     },
+    'add-library': async () => { rememberLibraries(); S.libs.push({ name: 'New library', kind: 'mixed', roots: [] }); await paint(RENDER.libraries()); $('#sg-name-' + (S.libs.length-1))?.focus(); },
     'add-root': async b => {
       const n = Number(b.dataset.n), input = $('#sg-add-' + n), path = field(input.value).trim();
       if (!path) { msg('sg-msg-' + n, 'Type or choose a folder first.', true); return; }
@@ -431,8 +438,11 @@ SMART_MEDIA_TLS_KEY=/private/privkey.pem</pre><p class="muted">The hostname must
     'save-libs': async () => {
       const btn = $('#sg-primary'); btn.disabled = true;
       try {
-        for (const l of S.libs) await post('/api/admin/libraries', { id: l.id, name: l.name, kind: l.kind, roots: l.roots });
-        const auto = $('#sg-autosort').checked;
+        rememberLibraries();
+        for (let n=0; n<S.libs.length; n++) if ($('#sg-add-'+n)?.value.trim()) await ACT['add-root']({dataset:{n}});
+        for (const l of S.libs.filter(l => l.id || l.roots.length)) { const saved = await post('/api/admin/libraries', { id: l.id, name: l.name, kind: l.kind, roots: l.roots }); l.id = saved.id; }
+        S.libs = S.libs.filter(l => l.id);
+        const auto = S.autoSort;
         await post('/api/admin/library-settings', { auto_sort: auto, scan_roots: [...new Set(S.libs.flatMap(l => l.roots))] });
         S.dirty = true; await go(S.i + 1, S.libs.some(l => l.roots.length) ? 'done' : 'skipped');
       } catch (e) { btn.disabled = false; msg('sg-foot-msg', e.message, true); }
@@ -529,7 +539,7 @@ SMART_MEDIA_TLS_KEY=/private/privkey.pem</pre><p class="muted">The hostname must
         const roots = lib.roots.filter(r => !seen.has(r)); roots.forEach(r => seen.add(r));
         if (!roots.length || S.scan.cancelled) continue;
         S.scan.lib = lib.name;
-        try { await post('/api/scan', { roots, library_id: lib.id, full_scan: false }); }
+        try { await post('/api/scan', { roots, library_id: S.autoSort ? null : lib.id, full_scan: false }); }
         catch (e) { if (e.status !== 409) throw e; }
         for (;;) {
           await sleep(450);

@@ -169,8 +169,10 @@ def run_regressions(api, request, db, base, video, direct):
         # Put it back in Movies for UI tests.
         db.execute("UPDATE library_files SET library_id=(SELECT id FROM libraries WHERE kind='movie' LIMIT 1) WHERE path=?",(str(direct),));db.commit()
         api('/api/admin/libraries/delete',{'id':lib['id']},status=404)
-        only_movie=next(x for x in api('/api/libraries')['libraries'] if x['kind']=='movie')
-        api('/api/admin/libraries/delete',{'id':only_movie['id']},status=409)
+        # A final library of a type can be deleted, and recreated only explicitly.
+        single=api('/api/admin/libraries',{'name':'Only mixed','kind':'mixed'})
+        api('/api/admin/libraries/delete',{'id':single['id']})
+        assert all(l['id']!=single['id'] for l in api('/api/libraries')['libraries'])
     with case('scan settings and empty incremental/full scan lifecycle'):
         root=base/'empty';root.mkdir(exist_ok=True)
         api('/api/admin/library-settings',{'auto_sort':False,'scan_roots':[str(root)]})

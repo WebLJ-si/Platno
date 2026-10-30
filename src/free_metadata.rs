@@ -157,7 +157,13 @@ pub(crate) async fn finish_unmatched(app: &App, p: &Parsed, result: &mut Value) 
             Err(_) => result["lookup_failed"] = json!(true),
         }
     }
-    let id = local_id(&p.kind, &p.title, p.year);
+    // Without episode evidence or an online match, an arbitrary clip is a
+    // video, rather than a fabricated local series.
+    let kind = if p.kind=="tv" && p.season.is_none() && p.episodes.is_empty() {"video"} else {&p.kind};
+    result["kind"] = json!(kind);
+    let title = if kind=="video" && !p.episode_title.is_empty() {&p.episode_title} else {&p.title};
+    result["title"] = json!(title);
+    let id = local_id(kind, title, p.year);
     result["provider"] = json!("local");
     result["provider_id"] = json!(id);
     result["confidence"] = json!(55);

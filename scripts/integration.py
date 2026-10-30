@@ -38,6 +38,10 @@ with tempfile.TemporaryDirectory(prefix='plexv2-test-') as tmp:
         assert b'Never cache authenticated' in request('/sw.js',opener=urllib.request.build_opener())[0]
         api('/api/auth/setup',{'email':'owner@example.test','password':'integration password 123','confirm_password':'integration password 123'})
         api('/api/owner/settings',{'key':'setup_guide','value':'done'})  # the first-run guide has its own browser test
+        assert api('/api/libraries')['libraries']==[], 'fresh installs must not seed libraries'
+        # This scenario explicitly configures three libraries to exercise typed browsing.
+        for name,kind in [('Movies','movie'),('TV Shows','tv'),('Videos','video')]:
+            api('/api/admin/libraries',{'name':name,'kind':kind})
         db=sqlite3.connect(data/'library.sqlite3')
         for n,path in enumerate([video,direct,hdr]):
             result={'kind':'movie','provider':'tmdb','provider_id':n+1,'title':f'Fixture {n}','confidence':100,'requires_review':False,'subtitles':[],'year':str(2020+n),'rating':[8,6,7][n],'runtime':[85,150,25][n],'genres':[['Comedy'],['Drama'],['Comedy']][n],'language':['en','sl','en'][n]}

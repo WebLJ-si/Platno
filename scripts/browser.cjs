@@ -52,6 +52,7 @@ const playwright=require('playwright');
   assert.equal(await page.locator('#player-chapter,#player-skip,.player-marker-editor').count(),0);
   assert.equal(await page.getByRole('button',{name:'Report playback issue',exact:true}).count(),0);
   await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,null,{timeout:40000});
+  await page.locator('#player-settings-toggle').click();
   assert(await page.locator('#player-audio').isVisible());
   await page.locator('#player-audio').selectOption('1');
   await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,null,{timeout:40000});
