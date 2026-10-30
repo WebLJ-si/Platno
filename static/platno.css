@@ -376,3 +376,7 @@ select:not([multiple]):not([size]) > button:focus{outline:none}
 .player-shell video::cue{font-family:var(--subtitle-font,inherit)}
 .player-shell video::-webkit-media-text-track-container{transform:translateY(calc((var(--sub-lift,0px) + var(--sub-raise,0px)) * -1))}
 .player-hint{margin:10px 0 0;color:#8f98a6;font:500 11px/1.5 Archivo,sans-serif}
+
+/* Continue-watching cards: the play button sits bottom right so it never covers the title of a card without artwork. */
+.resume-art .resume-play{left:auto;right:12px;bottom:12px}
+.resume-art .poster-fallback{padding-right:68px}

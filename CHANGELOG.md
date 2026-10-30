@@ -13,6 +13,7 @@ are built from the matching section.
 - Subtitle appearance (size, color, background, font, position, text shadow) is available in the player settings as well as in Settings. The manual subtitle delay field is gone.
 - Subtitles are no longer synchronized automatically. Sync subtitles now listens to up to five 10-second clips from different parts of the video and replaces any clip without speech with another random one.
 - Switching to another episode keeps the player in fullscreen.
+- On Continue watching cards without artwork the play button moved to the bottom right, so it no longer covers the first letters of the title.
 - Volume, Picture-in-Picture, settings and fullscreen sit together in the bottom right corner, like other video players. Hover the speaker for the volume slider; volume is no longer inside the settings panel. The settings panel opens above the corner.
 
 ## [0.2.1]
