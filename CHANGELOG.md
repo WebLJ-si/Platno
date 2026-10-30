@@ -3,7 +3,7 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
-## [Unreleased]
+## [0.2.2]
 
 ### Player
 - A pause, however long, no longer restarts the converted stream: about 30 seconds stay buffered and playback resumes in under half a second (measured with pauses up to 200 seconds).
