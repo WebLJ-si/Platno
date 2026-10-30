@@ -297,3 +297,29 @@ select:not([multiple]):not([size]) > button:focus{outline:none}
 @media(forced-colors:active){
   :is(a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex="-1"])):focus-visible{outline-color:Highlight}
 }
+
+/* Logo, player transport icons and the pause indicator. */
+.brand-mark svg{width:22px;height:22px}
+.player-top>button{display:grid;place-items:center}
+.player-top>button svg{width:22px;height:22px;display:block}
+.player-action-row button{line-height:0}
+.player-action-row button svg{width:30px;height:30px;display:block}
+.player-action-row #player-toggle{padding:0}
+.player-action-row #player-toggle svg{width:28px;height:28px}
+#player-mute{display:grid;place-items:center;width:42px;height:42px;padding:0;line-height:0}
+#player-mute svg{width:22px;height:22px}
+.player-top,.player-bottom{transition:opacity .3s ease}
+.player-pause-indicator{position:absolute;inset:0;z-index:1;display:grid;place-items:center;pointer-events:none;background:transparent;transition:background .3s ease}
+.player-pause-indicator span{display:grid;place-items:center;width:88px;height:88px;border-radius:50%;background:#09090bd9;color:#fff;opacity:0}
+.player-pause-indicator svg{width:38px;height:38px}
+.player-shell.is-paused .player-pause-indicator{background:#0000002e}
+.player-shell.is-paused .player-pause-indicator span{animation:pause-pop 1.2s cubic-bezier(.2,.8,.2,1) both}
+@keyframes pause-pop{0%{opacity:0;transform:scale(.7)}16%{opacity:1;transform:scale(1)}68%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(1.12)}}
+@media(prefers-reduced-motion:reduce){.player-shell.is-paused .player-pause-indicator span{animation:pause-fade 1.2s ease both}@keyframes pause-fade{0%,100%{opacity:0}15%,70%{opacity:1}}}
+.player-top .player-title{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;max-width:none;line-height:1.25;gap:1px}
+.player-title b{font-size:18px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.player-title small{font-size:13px;font-weight:500;color:#d3d9e2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:760px){.player-title b{font-size:15px}.player-title small{font-size:12px}}
+/* Chrome and Safari draw captions in this container; lift it above the control bar and let it follow the bar's fade. */
+.player-shell video::-webkit-media-text-track-container{transform:translateY(calc(var(--sub-lift,0px) * -1));transition:transform .3s ease}
+.player-title b,.player-title small{text-transform:none}

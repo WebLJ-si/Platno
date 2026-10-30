@@ -38,10 +38,10 @@ test('direct seek changes currentTime; converted seek restarts at an absolute po
  h.setState({mode:'transcode',duration:100,offset:30});h.video.currentTime=5;h.context.jumpVideo(10);assert.equal(h.starts[0][0],45);h.context.seekPlayer('60');assert.equal(h.starts[1][0],60);
 });
 test('mute toggles the media element and visible control',()=>{
- const h=setup(['toggleMute']);h.context.toggleMute();assert(h.video.muted);assert.equal(h.elements['#player-mute'].textContent,'🔇');h.context.toggleMute();assert(!h.video.muted);
+ const h=setup(['toggleMute','setMuteIcon']);vm.runInContext("var ICON_VOL='volume',ICON_MUTE='muted'",h.context);h.context.toggleMute();assert(h.video.muted);assert.equal(h.elements['#player-mute'].innerHTML,'muted');h.context.toggleMute();assert(!h.video.muted);assert.equal(h.elements['#player-mute'].innerHTML,'volume');
 });
 test('volume changes persist to local storage and the profile',()=>{
- const h=setup(['setVolume']);h.context.setVolume('0.35');assert.equal(h.video.volume,.35);assert.equal(h.stored.get('player-volume'),'0.35');assert.equal(h.posts[0].data.value,'0.35');h.context.setVolume('0');assert(h.video.muted);
+ const h=setup(['setVolume','setMuteIcon']);vm.runInContext("var ICON_VOL='volume',ICON_MUTE='muted'",h.context);h.context.setVolume('0.35');assert.equal(h.video.volume,.35);assert.equal(h.stored.get('player-volume'),'0.35');assert.equal(h.posts[0].data.value,'0.35');h.context.setVolume('0');assert(h.video.muted);
 });
 test('play/pause toggles actual playback and ignores an unprepared hidden video',()=>{
  const h=setup(['togglePlay']);let plays=0,pauses=0;h.video.play=()=>{plays++;return Promise.resolve()};h.video.pause=()=>pauses++;
@@ -131,4 +131,14 @@ test('speech alignment keeps absolute timing across converted seeks and manual d
 test('speech corrections are isolated to each selected subtitle track',()=>{
  const h=setup(['applySubtitleDelay']);vm.runInContext('const subtitleCueTimes=new WeakMap()',h.context);
  const first={startTime:10,endTime:12},second={startTime:20,endTime:22};h.video.textTracks=[{syncId:'a',cues:[first]},{syncId:'b',cues:[second]}];h.setState({mode:'direct',subtitleAlignments:{a:{scale:1,offset:3}}});h.context.applySubtitleDelay();assert.equal(first.startTime,13);assert.equal(second.startTime,20);
+});
+
+test('space and shortcuts work from a focused button, but not while typing',()=>{
+ const h=setup(['playerKey','togglePlay','showPlayerControls','playerControlsBusy','positionSubtitles']);
+ let toggled=0,prevented=0;h.context.togglePlay=()=>toggled++;
+ const key=(target,key)=>({key,target,ctrlKey:false,metaKey:false,altKey:false,shiftKey:false,preventDefault:()=>prevented++,stopPropagation(){}});
+ h.context.playerKey(key({tagName:'BUTTON',type:'button',isContentEditable:false,closest:()=>null},' '));assert.equal(toggled,1);assert.equal(prevented,1);
+ h.context.playerKey(key({tagName:'INPUT',type:'range',isContentEditable:false,closest:()=>null},' '));assert.equal(toggled,2);
+ h.context.playerKey(key({tagName:'INPUT',type:'number',isContentEditable:false,closest:()=>null},' '));assert.equal(toggled,2);
+ h.context.playerKey(key({tagName:'SELECT',type:'select-one',isContentEditable:false,closest:()=>null},' '));assert.equal(toggled,2);
 });

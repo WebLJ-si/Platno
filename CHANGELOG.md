@@ -3,6 +3,22 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
+## [Unreleased]
+
+### Player
+- Picture-in-Picture and Fullscreen are icon buttons beside the settings gear instead of text buttons inside the panel.
+- The play button and the 10-second buttons are real icons, centered in their circles; the volume and back buttons match.
+- Pausing shows a short animated pause icon and gently dims the picture. A pause no longer restarts playback unless it lasted over a minute and a half, so resuming does not rebuffer.
+- The header shows the episode title next to the season and episode.
+- Controls hide after 5 seconds of no mouse movement, but stay while the pointer is on them. Subtitles sit above the controls and move down when the controls hide.
+- Space always plays or pauses, even right after clicking a control. Up/Down change the volume and 0 to 9 jump through the video.
+
+### Brand
+- New Platno logo (a P whose bowl is a play button) in the sidebar, the browser tab icon, the installed-app icon and the offline and help pages.
+
+### Docker
+- The image includes the whisper.cpp speech engine and the verified base model, so automatic subtitle sync works without any setup.
+
 ## [0.2.0]
 
 ### Player and interface

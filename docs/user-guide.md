@@ -96,7 +96,7 @@ Continue Watching offers to resume a saved position. When you reopen a video you
 
 ## Playback and quality
 
-The bottom of the player contains the timeline, back 10 seconds, play/pause and forward 10 seconds. Use the Episodes icon at the top to choose a season or episode. The Settings gear groups quality, speed, subtitles and synchronization, volume, audio tracks, fullscreen, Picture-in-Picture and stream statistics. Escape closes the open panel first; clicking outside the panel also dismisses it.
+The bottom of the player contains the timeline, back 10 seconds, play/pause and forward 10 seconds. Use the Episodes icon at the top to choose a season or episode. Picture-in-Picture and Fullscreen are icon buttons at the top right, next to the Settings gear, which groups quality, speed, subtitles and synchronization, volume, audio tracks and stream statistics. The header shows the show, season, episode number and episode title. The controls fade after 5 seconds without mouse movement (not while the pointer is on them or a panel is open), and subtitles stay above them. Escape closes the open panel first; clicking outside the panel also dismisses it.
 
 Play opens the player. Compatible H.264/AAC MP4 files are sent directly using HTTP byte-range requests. Other formats are converted to H.264/AAC when needed. Playback never changes the original.
 
@@ -136,7 +136,7 @@ Automatic detection and correction of out-of-sync subtitles is listed in the TOD
 
 ## Keyboard, PiP and next episode
 
-Space or K toggles play/pause. Left arrow or J skips back 10 seconds; right arrow or L skips forward 10 seconds. F toggles fullscreen, M mutes, C cycles through subtitles, Shift+N opens the next locally available episode. Ctrl+K or Cmd+K focuses the library search.
+Space or K toggles play/pause, even when a button in the player has focus. Left arrow or J skips back 10 seconds; right arrow or L skips forward 10 seconds. Up and Down arrows change the volume; the number keys 0 to 9 jump to that tenth of the video. F toggles fullscreen, M mutes, C cycles through subtitles, Shift+N opens the next locally available episode. Ctrl+K or Cmd+K focuses the library search.
 
 While you type in input fields, selects and text areas, the player shortcuts do not fire. You can also open library cards with Enter or Space when they have focus.
 
@@ -192,7 +192,7 @@ Do not delete the data directory as a routine troubleshooting step: you would lo
 
 ## Automatic subtitle sync with speech
 
-The server can create a locally timestamped transcript from short audio samples and compare it with the chosen text subtitles. It needs whisper-cli and the ggml-base.bin model. On macOS install the tool with brew install whisper-cpp and run python3 scripts/setup-subtitle-sync.py. With a custom data directory add --data-dir or set SMART_MEDIA_WHISPER_MODEL; SMART_MEDIA_WHISPER sets the path to the tool. The model is downloaded only when you explicitly run the setup script, and its SHA-256 is verified.
+The server can create a locally timestamped transcript from short audio samples and compare it with the chosen text subtitles. It needs whisper-cli and the ggml-base.bin model. On macOS install the tool with brew install whisper-cpp and run python3 scripts/setup-subtitle-sync.py. With a custom data directory add --data-dir or set SMART_MEDIA_WHISPER_MODEL; SMART_MEDIA_WHISPER sets the path to the tool. The Docker image already includes both, so nothing needs installing there. Elsewhere the model is downloaded only when you explicitly run the setup script, and its SHA-256 is verified.
 
 Automatic subtitle sync in the profile settings is on by default when the local engine is installed. When you choose subtitles it analyzes at most two 75-second samples. At least three distinct matching passages of speech determine the offset; in a longer video the second sample can also estimate gradual timing drift. A poor match, translated subtitles or a different edit can prevent a reliable correction; the timing settings you had stay in place.
 
