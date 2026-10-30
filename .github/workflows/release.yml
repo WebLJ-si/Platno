@@ -40,7 +40,7 @@ jobs:
     uses: ./.github/workflows/image.yml
     secrets: inherit
     with:
-      tags: ${{ needs.check.outputs.stable == 'true' && format('{0} latest', needs.check.outputs.version) || needs.check.outputs.version }}
+      tags: ${{ needs.check.outputs.stable == 'true' && format('{0} latest beta', needs.check.outputs.version) || needs.check.outputs.version }}
 
   publish:
     needs: [check, build, image]

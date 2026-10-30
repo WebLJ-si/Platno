@@ -10,10 +10,9 @@ services:
       SMART_MEDIA_COOKIE_SECURE: "${SMART_MEDIA_COOKIE_SECURE:-0}"
       # Optional: put temporary conversion files on a RAM disk or another volume (see the tmpfs below).
       # SMART_MEDIA_TRANSCODE_DIR: /transcode
-      # Optional diagnostics for your own server: sends technical errors and a heartbeat to the collector
-      # (see BETA.md and docs/deployment.md). Off unless both are set; SMART_MEDIA_TELEMETRY=off turns it off again.
-      # SMART_MEDIA_RELEASE_CHANNEL: beta
-      # SMART_MEDIA_TELEMETRY_ENDPOINT: https://platno-observatory.vercel.app/api/ingest
+      # While Platno is in beta this image sends anonymous technical errors and layout reports to the project's
+      # collector (see BETA.md). Turn it off here, in Settings, or by using the weblj/platno:private image.
+      # SMART_MEDIA_TELEMETRY: "off"
     volumes:
       - platno-data:/data
       - "${PLEXV2_MEDIA_DIR:?Set PLEXV2_MEDIA_DIR to your absolute media directory}:/media:ro"

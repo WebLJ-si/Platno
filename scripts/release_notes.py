@@ -87,9 +87,9 @@ Start with `docker compose up -d`, then open http://127.0.0.1:8787. Update later
 `docker compose exec -it platno platno reset-owner-password`. There is no hardware video encoding
 inside the container unless you pass a GPU device through; software conversion always works.
 
-### Diagnostic beta image
+### Diagnostics during the beta
 
-`{ghcr}:beta` (and `{ghcr}:{version}-beta`) is the same program with automatic error and layout reporting switched on for testers. It sends anonymous technical reports to the project's collector; read [BETA.md](https://github.com/{repo}/blob/v{version}/BETA.md) first. The normal image above sends nothing.
+While Platno is in beta this image sends anonymous technical error and layout reports to the project's collector (no names, titles, paths or media; read [BETA.md](https://github.com/{repo}/blob/v{version}/BETA.md)). Turn it off with `SMART_MEDIA_TELEMETRY=off`, in Settings, or use `{ghcr}:private` (and `{ghcr}:{version}-private`), the same program that never sends anything.
 
 ## Synology
 

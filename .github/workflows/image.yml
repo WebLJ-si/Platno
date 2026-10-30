@@ -64,8 +64,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.names.outputs.list }}
-      - name: Work out the diagnostic beta names
-        id: beta
+      - name: Work out the private image names
+        id: private
         if: ${{ contains(inputs.tags, 'latest') }}
         env:
           TAGS: ${{ inputs.tags }}
@@ -74,10 +74,10 @@ jobs:
         run: |
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           version=${TAGS%% *}
-          list="ghcr.io/$owner/platno:beta,ghcr.io/$owner/platno:$version-beta"
-          [ -n "$HUB" ] && list="$list,$HUB/platno:beta,$HUB/platno:$version-beta"
+          list="ghcr.io/$owner/platno:private,ghcr.io/$owner/platno:$version-private"
+          [ -n "$HUB" ] && list="$list,$HUB/platno:private,$HUB/platno:$version-private"
           echo "list=$list" >> "$GITHUB_OUTPUT"
-      # Opt-in image for testers: the same program with diagnostics switched on (BETA.md explains what is sent).
+      # The same program with diagnostics switched off for people who want that (BETA.md).
       - uses: docker/build-push-action@v6
         if: ${{ contains(inputs.tags, 'latest') }}
         with:
@@ -86,6 +86,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            RELEASE_CHANNEL=beta
-            TELEMETRY_ENDPOINT=https://platno-observatory.vercel.app/api/ingest
-          tags: ${{ steps.beta.outputs.list }}
+            RELEASE_CHANNEL=stable
+            TELEMETRY_ENDPOINT=
+          tags: ${{ steps.private.outputs.list }}

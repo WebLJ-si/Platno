@@ -26,4 +26,4 @@ Open an [issue](https://github.com/WebLJ-si/Platno/issues). For a bug, say what 
 
 ## Ground rules
 
-Platno never modifies media files, never sends data anywhere without the owner turning it on, and never collects people's provider keys. Changes that break those promises will not be merged. By contributing you agree that your work is released under the project's [MIT License](LICENSE). Releases are cut by the maintainers, see [docs/releasing.md](docs/releasing.md).
+Platno never modifies media files, never sends your media, titles, paths or accounts anywhere (the only exception is the anonymous beta diagnostics described in [BETA.md](BETA.md), which the owner can switch off), and never collects people's provider keys. Changes that break those promises will not be merged. By contributing you agree that your work is released under the project's [MIT License](LICENSE). Releases are cut by the maintainers, see [docs/releasing.md](docs/releasing.md).

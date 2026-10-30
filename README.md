@@ -16,7 +16,7 @@
 
 A homelab is supposed to be yours: your hardware, your files, no meter running. Plex has moved in the other direction. Streaming your own library away from home now needs a paid pass ([Plex Pass or a Remote Watch Pass](https://forums.plex.tv/t/remote-streaming-will-be-a-plex-pass-feature/909369)), and your server depends on their account system. That defeats the purpose of running it yourself.
 
-Platno does the same job without a subscription, without an account anywhere, and without a company in the middle. You run one program, your friends and family sign in to *your* server, and nothing leaves your network unless you decide it should.
+Platno does the same job without a subscription, without an account anywhere, and without a company in the middle. You run one program, your friends and family sign in to *your* server, and your library, files and watch history never leave your network. During the beta the official Docker image also sends anonymous technical error reports (no names, titles or paths) that you can switch off, see [BETA.md](BETA.md).
 
 > **Platno is an open-source project backed by [WebLJ.si](https://weblj.si). Anyone is welcome to take part:** report a problem, suggest a feature, improve the docs or send code. See [Contributing](#contributing).
 
@@ -30,7 +30,7 @@ What you get:
 - **Made for a household.** Owner, administrators and users, profiles with PINs, watchlist and continue watching per profile.
 - **Guided first start.** An animated setup guide walks through folders, hardware, accounts, optional API keys and remote access, and says plainly what each skipped step costs.
 - **Updates itself when you say so.** One button in Settings checks GitHub, verifies the download and restarts. Nothing is ever sent or installed in the background.
-- **Private.** No telemetry in normal builds. The only outside requests are metadata lookups (TVmaze, Wikidata, optionally TMDB and OpenSubtitles) with the title being searched.
+- **Private.** Your media, titles and watch history stay on your server. The only outside requests are metadata lookups (TVmaze, Wikidata, optionally TMDB and OpenSubtitles) with the title being searched.
 
 ![First-run guide](docs/images/first-run-guide.png)
 
@@ -68,6 +68,8 @@ services:
 volumes:
   platno-data:
 ```
+
+**Diagnostics during the beta:** the official image sends anonymous technical error and layout reports to the project (what exactly: [BETA.md](BETA.md)). Turn it off with `SMART_MEDIA_TELEMETRY: "off"`, in Settings, or use `weblj/platno:private`, which never sends anything. A consent prompt is planned.
 
 The image is on [Docker Hub](https://hub.docker.com/r/weblj/platno) (`weblj/platno`, amd64 and arm64) and also on GitHub Container Registry (`ghcr.io/weblj-si/platno`). Start it with `docker compose up -d`. The container runs as UID 10001, so your media must be readable by that user. Update with `docker compose pull && docker compose up -d`. Each release page lists every Docker setting. Building the image yourself from this checkout: `docker compose up -d --build` (see [docs/deployment.md](docs/deployment.md)).
 

@@ -64,7 +64,7 @@ Create the service user and writable data directory first. Set `SMART_MEDIA_COOK
 
 ## Sending errors to a collector (optional)
 
-Platno sends nothing by default. To see technical errors and a heartbeat from your own server in the Platno Observatory (the Vercel collector in `telemetry-server/`, with a private Google-protected dashboard), start the server with both settings, for example in `compose.yaml` or the systemd environment:
+During the beta the official Docker image sends anonymous diagnostics by default (turn it off with `SMART_MEDIA_TELEMETRY=off`, in Settings, or use the `weblj/platno:private` image); source builds and the standalone programs send nothing unless configured. To see technical errors and a heartbeat from your own server in the Platno Observatory (the Vercel collector in `telemetry-server/`, with a private Google-protected dashboard), start the server with both settings, for example in `compose.yaml` or the systemd environment:
 
 ```
 SMART_MEDIA_RELEASE_CHANNEL=beta

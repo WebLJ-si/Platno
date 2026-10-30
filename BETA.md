@@ -2,7 +2,7 @@
 
 This beta includes **automatic diagnostic reporting** to the Platno Observatory operated by this project's maintainer. The diagnostic beta download and release notes must link to this notice before download. By choosing that clearly labeled beta, you acknowledge the reporting described here. This notice is not a substitute for explaining the behavior in the app; beta startup and the interface display it too.
 
-Source builds and stable builds send nothing by default. Diagnostic beta builds or installations explicitly configured as beta send technical errors and heartbeats automatically. After sign-in, participating browsers also attach a masked interface replay to error reports. No third-party analytics SDK or remote recording script is loaded.
+Source builds and the `private` image send nothing. **While Platno is in beta the official Docker images (`latest`, version tags and `beta`) send technical errors, layout reports and heartbeats automatically**; the owner can switch this off in Settings or with `SMART_MEDIA_TELEMETRY=off`, and each browser can switch off its own reporting. A consent prompt is planned for after the beta. After sign-in, participating browsers also attach a masked interface replay to error reports. No third-party analytics SDK or remote recording script is loaded.
 
 ## What is sent
 

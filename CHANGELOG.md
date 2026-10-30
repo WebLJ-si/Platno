@@ -3,6 +3,13 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
+## [Unreleased]
+
+### Diagnostics
+- While Platno is in beta the official Docker images (`latest`, version tags and `beta`) send anonymous technical error and layout reports to the project by default. The owner can switch this off in Settings or with `SMART_MEDIA_TELEMETRY=off`, each browser can switch off its own reporting, and Do Not Track is honoured.
+- New `weblj/platno:private` image: the same program, never sends anything. Source builds and the standalone programs also send nothing.
+- Settings explains why the diagnostics options are greyed out in a build that has them off.
+
 ## [0.2.3]
 
 ### Diagnostics

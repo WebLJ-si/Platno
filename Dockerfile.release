@@ -34,10 +34,12 @@ COPY --from=speech /whisper/build/bin/whisper-cli /usr/local/lib/platno/whisper-
 COPY --from=speech /ggml-base.bin /usr/local/share/platno/ggml-base.bin
 COPY docker-bin/platno-linux-${TARGETARCH} /usr/local/bin/platno
 RUN chmod 755 /usr/local/bin/platno && ln -s platno /usr/local/bin/smart-media-scanner
-# Diagnostic beta image: --build-arg RELEASE_CHANNEL=beta --build-arg TELEMETRY_ENDPOINT=https://.../api/ingest
-# (see BETA.md). The default build is stable and sends nothing.
-ARG RELEASE_CHANNEL=stable
-ARG TELEMETRY_ENDPOINT=
+# While Platno is in beta the official image sends anonymous diagnostics by default (see BETA.md); the owner can
+# switch it off in Settings or with SMART_MEDIA_TELEMETRY=off. The :private image is built with
+#   --build-arg RELEASE_CHANNEL=stable --build-arg TELEMETRY_ENDPOINT=
+# and sends nothing.
+ARG RELEASE_CHANNEL=beta
+ARG TELEMETRY_ENDPOINT=https://platno-observatory.vercel.app/api/ingest
 ENV SMART_MEDIA_RELEASE_CHANNEL=${RELEASE_CHANNEL} SMART_MEDIA_TELEMETRY_ENDPOINT=${TELEMETRY_ENDPOINT}
 ENV SMART_MEDIA_HOST=0.0.0.0 SMART_MEDIA_PORT=8787 SMART_MEDIA_DATA=/data SMART_MEDIA_DISTRIBUTION=docker
 USER media
