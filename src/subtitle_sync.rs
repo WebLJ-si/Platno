@@ -83,6 +83,8 @@ fn runtime(app: &App) -> (PathBuf, PathBuf) {
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             [
+                "/usr/local/lib/platno/whisper-cli", // bundled in the Docker image
+                "/usr/lib/platno/whisper-cli",
                 "/opt/homebrew/bin/whisper-cli",
                 "/usr/local/bin/whisper-cli",
             ]
@@ -103,10 +105,13 @@ fn runtime(app: &App) -> (PathBuf, PathBuf) {
     let model = std::env::var_os("SMART_MEDIA_WHISPER_MODEL")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            app.db
-                .parent()
-                .unwrap_or(Path::new("."))
-                .join("models/ggml-base.bin")
+            let installed = app.db.parent().unwrap_or(Path::new(".")).join("models/ggml-base.bin");
+            // A model the owner installed wins; otherwise use the one shipped inside the image or package.
+            ["/usr/local/share/platno/ggml-base.bin", "/usr/share/platno/ggml-base.bin"]
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| !installed.is_file() && p.is_file())
+                .unwrap_or(installed)
         });
     (executable, model)
 }
