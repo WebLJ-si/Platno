@@ -3,6 +3,13 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
+## [Unreleased]
+
+### Player
+- A pause, however long, no longer restarts the converted stream: about 30 seconds stay buffered and playback resumes in under half a second (measured with pauses up to 200 seconds).
+- The browser tooltip listing the keyboard shortcuts no longer pops up over the video.
+- Volume, Picture-in-Picture, settings and fullscreen sit together in the bottom right corner, like other video players. Hover the speaker for the volume slider; volume is no longer inside the settings panel. The settings panel opens above the corner.
+
 ## [0.2.1]
 
 ### Player

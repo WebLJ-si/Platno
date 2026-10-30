@@ -96,7 +96,7 @@ Continue Watching offers to resume a saved position. When you reopen a video you
 
 ## Playback and quality
 
-The bottom of the player contains the timeline, back 10 seconds, play/pause and forward 10 seconds. Use the Episodes icon at the top to choose a season or episode. Picture-in-Picture and Fullscreen are icon buttons at the top right, next to the Settings gear, which groups quality, speed, subtitles and synchronization, volume, audio tracks and stream statistics. The header shows the show, season, episode number and episode title. The controls fade after 5 seconds without mouse movement (not while the pointer is on them or a panel is open), and subtitles stay above them. Escape closes the open panel first; clicking outside the panel also dismisses it.
+The bottom of the player contains the timeline, back 10 seconds, play/pause and forward 10 seconds. Use the Episodes icon at the top to choose a season or episode. In the bottom right corner are volume (hover the speaker for the slider), Picture-in-Picture, the Settings gear and Fullscreen, as in other video players. Settings groups quality, speed, subtitles and synchronization, the audio track and stream statistics, and opens above the corner. The header shows the show, season, episode number and episode title. The controls fade after 5 seconds without mouse movement (not while the pointer is on them or a panel is open), and subtitles stay above them. Escape closes the open panel first; clicking outside the panel also dismisses it.
 
 Play opens the player. Compatible H.264/AAC MP4 files are sent directly using HTTP byte-range requests. Other formats are converted to H.264/AAC when needed. Playback never changes the original.
 
