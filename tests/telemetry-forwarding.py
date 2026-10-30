@@ -107,6 +107,16 @@ def main():
         forwarded = next(p for _, p in Collector.received if p['kind'] == 'browser_error')
         assert forwarded['code'] == 'read-null' and 'serverUptimeSeconds' in forwarded and forwarded['release'] == VERSION, forwarded
 
+        # Layout problems travel the same way and pass the collector's real schema; labels or text never do.
+        layout = {**GOOD, 'kind': 'ui_issue', 'code': 'layout-overlap', 'count': 2, 'frames': [],
+                  'replay': [{'kind': 'snapshot', 'offsetMs': 3, 'scene': 'library', 'width': 390, 'height': 844,
+                              'boxes': [{'x': 1, 'y': 2, 'w': 30, 'h': 40, 'kind': 'button'}, {'x': 3, 'y': 4, 'w': 30, 'h': 40, 'kind': 'text', 'flag': True}]}]}
+        layout['release'] = VERSION
+        assert beta.call('POST', '/api/telemetry/report', layout)[0] == 202
+        wait_for(lambda: any(p['kind'] == 'ui_issue' for _, p in Collector.received), 'forwarded layout report')
+        leaked = json.loads(json.dumps(layout)); leaked['replay'][0]['boxes'][1]['label'] = 'Private movie title'
+        assert beta.call('POST', '/api/telemetry/report', leaked)[0] == 400, 'box labels are refused'
+
         before = len(Collector.received)
         for private in [{**GOOD, 'message': 'private movie title'}, {**GOOD, 'code': 'secret-token-value'},
                         {**GOOD, 'context': {'email': 'user@example.test'}}, {**GOOD, 'scene': '/Users/me/movie.mkv'}]:

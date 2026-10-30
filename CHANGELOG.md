@@ -3,7 +3,7 @@
 All notable changes to Platno are listed here. The newest release is first. Release notes on GitHub
 are built from the matching section.
 
-## [Unreleased]
+## [0.2.3]
 
 ### Diagnostics
 - The diagnostic beta (opt-in, see BETA.md) now also reports layout problems: a page wider than the screen, controls overlapping each other or a title, clipped button text and controls outside the screen, with a wireframe that marks the boxes involved and no text. It also reports stalls, slow requests, 403/404-type responses, policy violations and failed styles or pictures, and server events for FFmpeg failures, scan errors and speech-sync tool failures.
