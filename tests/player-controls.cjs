@@ -142,3 +142,22 @@ test('space and shortcuts work from a focused button, but not while typing',()=>
  h.context.playerKey(key({tagName:'INPUT',type:'number',isContentEditable:false,closest:()=>null},' '));assert.equal(toggled,2);
  h.context.playerKey(key({tagName:'SELECT',type:'select-one',isContentEditable:false,closest:()=>null},' '));assert.equal(toggled,2);
 });
+test('subtitle appearance applies live to the video and the caption position',()=>{
+ const h=setup(['applySubtitleStyle']);const prefs=value=>vm.runInContext('profilePrefs='+JSON.stringify(value),h.context);
+ const style={values:{},setProperty(k,v){this.values[k]=v}},shell={style:{values:{},setProperty(k,v){this.values[k]=v}}};
+ h.context.document={querySelectorAll:()=>[{style}]};h.context.$=id=>id==='#player-shell'?shell:null;
+ prefs({subtitle_size:'170',subtitle_color:'green',subtitle_background:'semi',subtitle_font:'serif',subtitle_position:'high',subtitle_shadow:'false'});
+ h.context.applySubtitleStyle();
+ assert.equal(style.values['--subtitle-size'],'170%');assert.equal(style.values['--subtitle-color'],'#8dff9b');assert.equal(style.values['--subtitle-background'],'rgba(0,0,0,.42)');
+ assert.match(style.values['--subtitle-font'],/Georgia/);assert.equal(style.values['--subtitle-shadow'],'none');assert.equal(shell.style.values['--sub-raise'],'70px');
+ prefs({});h.context.applySubtitleStyle();
+ assert.equal(style.values['--subtitle-size'],'100%');assert.equal(style.values['--subtitle-color'],'#fff');assert.equal(shell.style.values['--sub-raise'],'0px');
+ prefs({subtitle_position:'low',subtitle_background:'transparent'});h.context.applySubtitleStyle();
+ assert.equal(shell.style.values['--sub-raise'],'-14px');assert.equal(style.values['--subtitle-background'],'transparent');
+});
+test('subtitle appearance controls list the options and keep an older saved size selectable',()=>{
+ const h=setup(['subtitleAppearanceHtml']);
+ const html=h.context.subtitleAppearanceHtml({subtitle_size:'80',subtitle_color:'cyan',subtitle_shadow:'false'});
+ assert(html.includes("savePreference('subtitle_size'"));assert(html.includes('<option value="80" selected>80</option>'),'legacy 80% stays selected');
+ assert(html.includes('<option value="cyan" selected>Cyan</option>'));assert(html.includes('Monospace'));assert(html.includes('Higher'));assert(!/\schecked\s/.test(html.split('Text shadow')[1]),'shadow off is unchecked');
+});

@@ -126,7 +126,7 @@ The player supports embedded text tracks and detected local SRT, VTT, ASS or SSA
 
 Choose the main track in Subtitles. If more tracks are available you can add Second subtitles; two different tracks are shown at separate heights. The same track is never shown twice.
 
-Subtitle delay is a manual offset in seconds between -30 and 30. A positive value shows the subtitle later; a negative value earlier. Changes do not add up: going from +2 to +1 means a final delay of +1. The delay does not change the original file.
+Subtitle appearance (size, color, background, font, position and text shadow) is in the player settings under Subtitle appearance and in Settings, Profile preferences. It is saved to your profile and applies at once. There is no manual delay field: use Sync subtitles instead.
 
 In the profile settings you choose the default language and mode (off, preferred language or always), plus size, color, background and shadow. The default language only works if the track is labeled well enough.
 
@@ -194,9 +194,9 @@ Do not delete the data directory as a routine troubleshooting step: you would lo
 
 The server can create a locally timestamped transcript from short audio samples and compare it with the chosen text subtitles. It needs whisper-cli and the ggml-base.bin model. On macOS install the tool with brew install whisper-cpp and run python3 scripts/setup-subtitle-sync.py. With a custom data directory add --data-dir or set SMART_MEDIA_WHISPER_MODEL; SMART_MEDIA_WHISPER sets the path to the tool. The Docker image already includes both, so nothing needs installing there. Elsewhere the model is downloaded only when you explicitly run the setup script, and its SHA-256 is verified.
 
-Automatic subtitle sync in the profile settings is on by default when the local engine is installed. When you choose subtitles it analyzes at most two 75-second samples. At least three distinct matching passages of speech determine the offset; in a longer video the second sample can also estimate gradual timing drift. A poor match, translated subtitles or a different edit can prevent a reliable correction; the timing settings you had stay in place.
+Subtitles are never synchronized automatically. When you press Sync subtitles the server listens to up to five short clips (10 seconds each), one from each fifth of the video, preferring spots where the subtitles say someone is talking. A clip without recognisable speech is replaced by another random spot (at most 12 tries). At least three distinct matching passages of speech determine the offset; clips from different parts of the video also reveal gradual timing drift. A poor match, translated subtitles or a different edit can prevent a reliable correction; the timing you had stays in place.
 
-Sync subtitles tries the alignment again. Cancel sync stops the current profile's job. Undo sync restores the original timestamps during the current playback. A manual Subtitle delay is added on top of the alignment. The setting is separate for the two displayed subtitle tracks and follows seeks in the video. Original files are never overwritten. Samples and transcripts stay on the server in a temporary directory; only the determined timing correction is cached, separately per profile, video, subtitle, audio and model.
+Sync subtitles starts the alignment, and pressing it again listens to new random clips. Cancel sync stops the current profile's job. Undo sync restores the original timestamps during the current playback. The setting is separate for the two displayed subtitle tracks and follows seeks in the video. Original files are never overwritten. Samples and transcripts stay on the server in a temporary directory; only the determined timing correction is cached, separately per profile, video, subtitle, audio and model.
 
 ## Remote access
 

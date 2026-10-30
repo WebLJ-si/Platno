@@ -281,9 +281,8 @@ If a suitable saved position exists, **Continue watching?** opens:
 - **Audio track**: choice of an embedded audio track; shown only if at least two tracks are available. Tracks can include language, codec, channel count and title. A change may restart the conversion at the current position.
 - **Subtitles**: turns the main text subtitle track off or chooses one.
 - **Second subtitles**: turns the second subtitle track off or chooses one; the selector appears when at least two tracks are available.
-- **Subtitle delay**: manual subtitle offset in seconds, from −30 to +30, added to the speech synchronization.
-- **Sync subtitles**: realigns the chosen text tracks from short local audio samples. **Cancel sync** stops its own job; **Undo sync** restores the original timestamps for the current playback.
-- **Automatically sync subtitles with local speech recognition**: a profile setting for automatic alignment after choosing a subtitle; it requires a local Whisper and model.
+- **Sync subtitles**: realigns the chosen text tracks from up to five short local audio clips, only when pressed. **Cancel sync** stops its own job; **Undo sync** restores the original timestamps for the current playback.
+- **Subtitle appearance**: size (70–200%), color, background (dark, semi-transparent, none), font, position (lower, default, higher) and text shadow. They are profile settings, also available in Settings under Profile preferences, and apply immediately.
 - **Quality**: **Auto**, **1080p**, **720p** or **480p**.
 - **Playback speed**: **0.5×**, **0.75×**, **1×**, **1.25×**, **1.5×** or **2×**.
 - **Compatibility mode**: restarts playback with software H.264/AAC conversion and robust seeking; Auto uses 720p.

@@ -486,7 +486,7 @@ async fn identify(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
     result
 }
 async fn identify_online(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
-    let mut result = json!({"kind":p.kind,"title":p.title,"season":p.season,"episodes":p.episodes,"episode_title":p.episode_title,"year":p.year.map(|y|y.to_string()),"confidence":0,"explanation":p.explanation,"subtitles":subs,"candidates":[],"provider":"","order":"aired","requires_review":false,"matcher_version":7});
+    let mut result = json!({"kind":p.kind,"title":p.title,"season":p.season,"episodes":p.episodes,"episode_title":p.episode_title,"year":p.year.map(|y|y.to_string()),"confidence":0,"explanation":p.explanation,"subtitles":subs,"candidates":[],"provider":"","order":"aired","requires_review":false,"matcher_version":8});
     if matches!(p.kind.as_str(), "extra"|"video") {
         return result;
     }
@@ -758,6 +758,11 @@ async fn identify_online(app: &App, p: &Parsed, subs: Vec<String>) -> Value {
                     .iter()
                     .filter_map(|e| e["number"].as_u64())
                     .collect::<Vec<_>>());
+                // The catalogue's own episode name beats whatever the filename carried.
+                let names: Vec<&str> = matching.iter().filter_map(|e| e["name"].as_str()).map(str::trim).filter(|n| !n.is_empty()).collect();
+                if !names.is_empty() {
+                    result["episode_title"] = json!(names.join(" / "));
+                }
                 result["confidence"] = json!((*score).min(100.0));
                 result["explanation"] = json!(if search_title != p.title {
                     "Series matched using a corroborating folder title; episode verified in the TVmaze aired catalogue"
@@ -915,7 +920,9 @@ async fn scan(app: App, roots: Vec<String>, library_id:Option<i64>, auto_sort:bo
                 && version < 3)
                 || (previous_result["kind"] == "tv"
                     && previous_result["provider_id"].is_null()
-                    && version < 4);
+                    && version < 4)
+                // Version 8 stores the catalogue's episode name; re-read TVmaze matches once.
+                || (previous_result["kind"] == "tv" && previous_result["provider"] == "tvmaze" && version < 8);
             let stale_bonus = path.ancestors().any(|p| {
                 p.file_name()
                     .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("Featurettes"))

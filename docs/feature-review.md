@@ -35,7 +35,7 @@ Update of 29 Oct 2026: at the user's request, manual skip markers, chapter navig
 | Remember the last speed and volume | Implemented | Speed and volume are stored in the profile; volume also locally as a fallback. |
 | Volume normalization and night mode (dynamic compression): quiet speech, loud explosions | Deferred | Needs a verified audio chain for both converters and loudness measurements; we do not change audio without a clear setting. |
 | Surround sound: keep 5.1 and downmix to stereo if the client cannot cope | Partly existing | Compatible originals stay unchanged; the HLS downmix to stereo is verified. Multichannel delivery needs a client capability handshake. |
-| Manual subtitle delay (+/- seconds) and audio delay | Partly implemented | Manual delay of text subtitles ±30 seconds; audio delay is not implemented. |
+| Manual subtitle delay (+/- seconds) and audio delay | Removed | The manual delay field was removed in favour of Sync subtitles; audio delay is not implemented. |
 | Subtitle style: background, outline, shadow, position | Partly implemented | Size, color, dark/transparent background and shadow. Dual subtitles have separate positions; an arbitrary style editor does not exist yet. |
 | Two subtitles at once (language learning) | Implemented | Two different text tracks with a shared time offset and separate positions. |
 | "Stats for nerds" display: codec, bitrate, direct/transcode, reason for transcoding | Implemented | Stream data, selected track, quality, mode and the reason for conversion in the player. |

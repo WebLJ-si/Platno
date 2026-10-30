@@ -116,7 +116,7 @@ def run_regressions(api, request, db, base, video, direct):
         api('/api/watchlist/toggle', {'path': str(video), 'enabled': False}, opener=user)
         assert api('/api/watchlist', opener=user)['items'] == []
     with case('all profile setting types persist and reject unsupported values'):
-        values = {'playback_quality':'720','playback_speed':'1.25','playback_volume':'0.4','audio_language':'sl','subtitle_language':'en','subtitle_mode':'always','subtitle_size':'120','subtitle_color':'yellow','subtitle_background':'transparent','subtitle_shadow':'false','auto_play_next':'false','show_continue':'false','show_recommendations':'false','show_popular':'false','reduce_motion':'true','continue_limit':'24','accent_color':'blue'}
+        values = {'playback_quality':'720','playback_speed':'1.25','playback_volume':'0.4','audio_language':'sl','subtitle_language':'en','subtitle_mode':'always','subtitle_size':'120','subtitle_color':'yellow','subtitle_background':'transparent','subtitle_shadow':'false','auto_play_next':'false','show_continue':'false','show_recommendations':'false','show_popular':'false','reduce_motion':'true','continue_limit':'24','show_next_card':'false','subtitle_font':'serif','subtitle_position':'high','accent_color':'blue'}
         for key, value in values.items(): api('/api/user/settings', {'key':key,'value':value}, opener=user)
         assert api('/api/user/settings', opener=user) == values
         for key in values:

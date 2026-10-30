@@ -346,3 +346,33 @@ select:not([multiple]):not([size]) > button:focus{outline:none}
  .player-controls-side{display:none}
  .player-corner{grid-column:1}
 }
+
+/* Next-episode card: small, bottom right, above the control bar. */
+.next-card{position:absolute;z-index:4;right:24px;bottom:calc(var(--sub-lift,0px) + 16px);width:min(300px,calc(100% - 24px));padding:12px 14px 10px;color:#f4f4f5;background:#101014f2;border:1px solid #ffffff22;border-radius:12px;font:500 12px/1.4 Archivo,sans-serif;opacity:0;transform:translateY(8px);transition:opacity .25s ease,transform .25s ease,bottom .3s ease}
+.next-card[hidden]{display:none}
+.next-card.is-visible{opacity:1;transform:none}
+.next-card p{margin:0}
+.next-card-label{color:#b4bcc8}
+.next-card-label b{color:#fff;font-weight:700;font-variant-numeric:tabular-nums}
+.next-card-title{margin-top:2px!important;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.next-card-note{margin-top:2px!important;color:#8f98a6;font-size:11px}
+.next-card-actions{display:flex;gap:8px;margin-top:10px}
+.next-card button{min-height:32px;padding:0 14px;border-radius:999px;font:600 12px/1 Archivo,sans-serif}
+.next-card .next-go{background:var(--accent);color:#09090b;border:0}
+.next-card .next-close{background:transparent;color:#e4e7ec;border:1px solid #ffffff2e}
+.next-card .next-close:hover{background:#ffffff14}
+.next-card-bar{height:2px;margin-top:12px;background:#ffffff1a;overflow:hidden}
+.next-card-bar span{display:block;height:100%;width:100%;background:var(--accent);transition:width 1s linear}
+.next-card .next-card-hide{display:block;min-height:20px;margin:8px 0 0;padding:0;border:0;border-radius:0;background:none;color:#8f98a6;font:500 10.5px/1.2 Archivo,sans-serif;text-decoration:underline;text-underline-offset:2px}
+.next-card .next-card-hide:hover{color:#d4d9e1}
+.next-card-confirm p{color:#d4d9e1;font-size:12px}
+.next-card-confirm b{color:#fff}
+.next-card:not(.is-confirming) .next-card-confirm,.next-card.is-confirming .next-card-body,.next-card.is-confirming .next-card-hide{display:none}
+@media(max-width:760px){.next-card{right:12px}}
+@media(prefers-reduced-motion:reduce){.next-card,.next-card-bar span{transition:opacity .15s ease}}
+.player-title b .player-title-episode{font-weight:500;color:#d3d9e2}
+
+/* Subtitle look: font from the profile; the caption container also rides above the control bar plus the chosen raise. */
+.player-shell video::cue{font-family:var(--subtitle-font,inherit)}
+.player-shell video::-webkit-media-text-track-container{transform:translateY(calc((var(--sub-lift,0px) + var(--sub-raise,0px)) * -1))}
+.player-hint{margin:10px 0 0;color:#8f98a6;font:500 11px/1.5 Archivo,sans-serif}

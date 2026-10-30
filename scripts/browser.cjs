@@ -57,7 +57,7 @@ const playwright=require('playwright');
   assert(await page.locator('#player-audio').isVisible());
   await page.locator('#player-audio').selectOption('1');
   await page.waitForFunction(()=>document.getElementById('player-video')?.currentTime>.3,null,{timeout:40000});
-  await page.locator('#player-subtitle').selectOption({index:1});await page.locator('#subtitle-delay').fill('1.5');await page.locator('#subtitle-delay').dispatchEvent('change');
+  await page.locator('#player-subtitle').selectOption({index:1});assert.equal(await page.locator('#subtitle-delay').count(),0,'the manual subtitle delay field is gone');assert(await page.getByRole('heading',{name:'Subtitle appearance'}).count()>0);
   await page.locator('#player-subtitle-secondary').selectOption({index:2});
   await page.waitForFunction(()=>Array.from(document.getElementById('player-video').textTracks).filter(t=>t.cues?.length>0).length===2);
   assert.equal(await page.locator('#player-chapter,#player-skip,.player-marker-editor').count(),0);

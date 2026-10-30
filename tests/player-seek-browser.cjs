@@ -77,6 +77,13 @@ const PASSWORD = 'seek password 12345';
       await page.screenshot({path:'/tmp/plexv2-player-clean.png'});
       // Leaving the player with the back arrow must also leave fullscreen.
       await page.setViewportSize({ width: 1280, height: 800 });
+      // Switching episode (the player is rebuilt) must keep the page in fullscreen.
+      await page.mouse.move(640, 500); await page.locator('button[aria-label="Fullscreen"]').click();
+      await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 });
+      await page.evaluate(() => { const i = files.findIndex(f => f.path === playerState.path); playFile(i); });
+      await page.waitForTimeout(1500);
+      assert.equal(await page.evaluate(() => document.fullscreenElement?.id), 'player-shell', `${mode}: switching episode must not leave fullscreen`);
+      await page.evaluate(() => document.exitFullscreen()); await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
       await page.mouse.move(640, 500); await page.locator('button[aria-label="Fullscreen"]').click();
       await page.waitForFunction(() => document.fullscreenElement?.id === 'player-shell', null, { timeout: 5000 });
       await page.locator('button[aria-label="Back to library"]').click();

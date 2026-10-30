@@ -8,6 +8,11 @@ are built from the matching section.
 ### Player
 - A pause, however long, no longer restarts the converted stream: about 30 seconds stay buffered and playback resumes in under half a second (measured with pauses up to 200 seconds).
 - The browser tooltip listing the keyboard shortcuts no longer pops up over the video.
+- A card in the bottom right shows 90 seconds before the end of an episode: a countdown to the end, the next episode's name, Go to next and Close. "Don't show again" asks first and saves to your profile; turn it back on in Settings under Profile preferences.
+- The header shows the episode title next to the show name, using the catalogue's name for series matched online (rescan once to fill in existing episodes).
+- Subtitle appearance (size, color, background, font, position, text shadow) is available in the player settings as well as in Settings. The manual subtitle delay field is gone.
+- Subtitles are no longer synchronized automatically. Sync subtitles now listens to up to five 10-second clips from different parts of the video and replaces any clip without speech with another random one.
+- Switching to another episode keeps the player in fullscreen.
 - Volume, Picture-in-Picture, settings and fullscreen sit together in the bottom right corner, like other video players. Hover the speaker for the volume slider; volume is no longer inside the settings panel. The settings panel opens above the corner.
 
 ## [0.2.1]
